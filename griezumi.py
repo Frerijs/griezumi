@@ -8,6 +8,7 @@ import tempfile
 import os
 
 # Funkcija, lai ielādētu LandXML un iegūtu triangulāciju
+
 def load_landxml(filepath):
     tree = ET.parse(filepath)
     root = tree.getroot()
@@ -16,7 +17,16 @@ def load_landxml(filepath):
     points = {}
     triangles = []
     
-    for p in root.findall(".//ns:Point", ns):
+    # Pārbaudām, vai LandXML satur punktus
+    point_elements = root.findall(".//ns:Point", ns)
+    if not point_elements:
+        st.write("⚠️ Brīdinājums: Netika atrasti punkti LandXML failā.")
+        st.write("LandXML koka struktūra:")
+        for child in root:
+            st.write(child.tag)
+        return triangles, []
+    
+    for p in point_elements:
         pid = p.attrib['id']
         x, y, z = map(float, p.text.split())
         points[pid] = (x, y, z)
@@ -102,14 +112,11 @@ if landxml_files and shp_files:
         st.write(f"Atrastās {len(gdf)} līnijas no SHP faila.")
         st.write(f"LandXML virsmas: {[key for key in landxml_surfaces.keys()]}")
         
-        # Diagnostikas izvade
-        st.write("### Diagnostikas dati")
-        for name, points in landxml_points.items():
-            st.write(f"{name} pirmie 5 punkti: {points[:5]}")
-        
-        for i, row in gdf.iterrows():
-            line = row.geometry
-            st.write(f"Līnija {i} pirmie 5 punkti: {list(line.coords)[:5]}")
+        # Pārbaude: Vai SHP līnijas satur Z vērtības?
+        if any(len(coord) == 3 for line in gdf.geometry for coord in line.coords):
+            st.write("✅ SHP fails satur Z vērtības.")
+        else:
+            st.write("⚠️ Brīdinājums: SHP failam nav Z vērtību, interpolācija var nebūt precīza.")
         
         fig, ax = plt.subplots()
         
