@@ -363,7 +363,7 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                     line_attribute_id_str = str(line_attribute_id).replace(',', '').strip()
 
                 st.markdown(f"### Griezums: {line_attribute_id_str}")
-                st.image(f'data:image/png;base64,{map_image_base64}', use_column_width=True, caption=f'Karte griezumam {line_attribute_id_str}')
+                st.image(f'data:image/png;base64,{map_image_base64}', use_container_width=True, caption=f'Karte griezumam {line_attribute_id_str}')
                 st.plotly_chart(fig, use_container_width=True)
 
     st.success("Apstrāde pabeigta!")
