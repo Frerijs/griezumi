@@ -339,23 +339,20 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                     elif surface_type == 'dem':
                         dem_dataset = surface_rasters[surface_name]
                         try:
-                            row_indices, col_indices = dem_dataset.index(x_coords.tolist(), y_coords.tolist())
+                            # Izsauc ar NumPy masīviem, nevis sarakstiem
+                            row_indices, col_indices = dem_dataset.index(x_coords, y_coords)
                         except Exception as e:
                             st.error(f"Kļūda indeksēšanas procesā līnijai {current_line_id}: {e}")
                             continue
-                        z_values = []
-                        dem_data = dem_dataset.read(1)
-                        nodata = dem_dataset.nodata
-                        for row_idx, col_idx in zip(row_indices, col_indices):
-                            try:
-                                value = dem_data[row_idx, col_idx]
-                                if value == nodata:
-                                    z_values.append(np.nan)
-                                else:
-                                    z_values.append(value)
-                            except IndexError:
-                                z_values.append(np.nan)
-                        z_values = np.array(z_values)
+                        try:
+                            # Ātrāka un efektīvāka pieeja, izmantojot avanīģe izkārtojumu
+                            z_values = dem_dataset.read(1)[row_indices, col_indices]
+                            # Replaces nodata values with NaN
+                            z_values = np.where(z_values == dem_dataset.nodata, np.nan, z_values)
+                        except IndexError:
+                            st.error(f"Kļūda piekļūstot DEM datiem līnijai {current_line_id}.")
+                            continue
+
                         df[f'Elevation_{surface_name}'] = z_values
 
                 elevation_columns = [col for col in df.columns if col.startswith('Elevation_')]
