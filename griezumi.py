@@ -12,30 +12,31 @@ import os
 def load_landxml(filepath):
     tree = ET.parse(filepath)
     root = tree.getroot()
-    ns = {'ns': 'http://www.landxml.org/schema/LandXML-1.2'}
+    ns = {'ns': 'http://www.landxml.org/schema/LandXML-1.0'}  # Atbalstām LandXML-1.0
     
     points = {}
     triangles = []
     
-    # Pārbaudām, vai LandXML satur punktus
-    point_elements = root.findall(".//ns:Point", ns)
+    # Meklējam punktus dažādās LandXML sadaļās
+    point_elements = root.findall(".//ns:Pnts/ns:P", ns)  # Meklē <Pnts> struktūru
     if not point_elements:
+        point_list_element = root.find(".//ns:DataPoints/ns:PntList3D", ns)  # Alternatīvs meklējums
+        if point_list_element is not None:
+            point_list = point_list_element.text.split()
+            for i in range(0, len(point_list), 3):
+                x, y, z = map(float, point_list[i:i+3])
+                points[len(points) + 1] = (x, y, z)
+    else:
+        for p in point_elements:
+            pid = p.attrib['id']
+            x, y, z = map(float, p.text.split())
+            points[pid] = (x, y, z)
+    
+    if not points:
         st.write("⚠️ Brīdinājums: Netika atrasti punkti LandXML failā.")
-        st.write("LandXML koka struktūra:")
-        for child in root:
-            st.write(child.tag)
         return triangles, []
     
-    for p in point_elements:
-        pid = p.attrib['id']
-        x, y, z = map(float, p.text.split())
-        points[pid] = (x, y, z)
-    
-    for tri in root.findall(".//ns:Triangle", ns):
-        p1, p2, p3 = tri.text.split()
-        if p1 in points and p2 in points and p3 in points:
-            triangles.append((points[p1], points[p2], points[p3]))
-    
+    st.write(f"✅ Atrasti {len(points)} punkti no LandXML!")
     return triangles, list(points.values())
 
 # Funkcija, lai apmainītu X un Y koordinātes LandXML punktiem
