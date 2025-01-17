@@ -4,6 +4,8 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import matplotlib.pyplot as plt
 from shapely.geometry import LineString, Point
+import tempfile
+import os
 
 # Funkcija, lai ielādētu LandXML un iegūtu triangulāciju
 def load_landxml(filepath):
@@ -67,29 +69,47 @@ def calculate_profile(triangles, line):
 # Streamlit UI
 st.title("LandXML & SHP griezumu vizualizācija")
 
-landxml_file = st.file_uploader("Augšupielādē LandXML", type=["xml"])
-shp_file = st.file_uploader("Augšupielādē SHP", type=["shp"])
+landxml_files = st.file_uploader("Augšupielādē LandXML failus", type=["xml"], accept_multiple_files=True)
+shp_files = st.file_uploader("Augšupielādē SHP un papildfailus", type=["shp", "shx", "dbf", "prj", "cpg"], accept_multiple_files=True)
 
-if landxml_file and shp_file:
-    triangles = load_landxml(landxml_file)
-    triangles = swap_xy(triangles)  # Apmainīt X un Y koordinātes
-    gdf = gpd.read_file(shp_file)
+if landxml_files and shp_files:
+    temp_dir = tempfile.mkdtemp()
+    shp_main_file = None
     
-    st.write("Ielādētas SHP līnijas un LandXML virsma.")
+    for file in shp_files:
+        file_path = os.path.join(temp_dir, file.name)
+        with open(file_path, "wb") as f:
+            f.write(file.getvalue())
+        if file.name.endswith(".shp"):
+            shp_main_file = file_path
     
-    fig, ax = plt.subplots()
-    
-    for _, row in gdf.iterrows():
-        line = row.geometry
-        profile = calculate_profile(triangles, line)
+    if shp_main_file:
+        gdf = gpd.read_file(shp_main_file)
+        landxml_surfaces = {}
         
-        if profile:
-            x_vals, y_vals, z_vals = zip(*profile)
-            ax.plot(x_vals, z_vals, label=f"Līnija {row.name}")
-    
-    ax.set_xlabel("Attālums")
-    ax.set_ylabel("Augstums")
-    ax.set_title("Griezumu profili")
-    ax.legend()
-    
-    st.pyplot(fig)
+        for landxml_file in landxml_files:
+            file_path = os.path.join(temp_dir, landxml_file.name)
+            with open(file_path, "wb") as f:
+                f.write(landxml_file.getvalue())
+            triangles = load_landxml(file_path)
+            triangles = swap_xy(triangles)
+            landxml_surfaces[landxml_file.name] = triangles
+        
+        st.write("Ielādētas SHP līnijas un LandXML virsmas.")
+        
+        fig, ax = plt.subplots()
+        
+        for _, row in gdf.iterrows():
+            line = row.geometry
+            for surface_name, triangles in landxml_surfaces.items():
+                profile = calculate_profile(triangles, line)
+                if profile:
+                    x_vals, y_vals, z_vals = zip(*profile)
+                    ax.plot(x_vals, z_vals, label=f"{surface_name} - Līnija {row.name}")
+        
+        ax.set_xlabel("Attālums")
+        ax.set_ylabel("Augstums")
+        ax.set_title("Griezumu profili")
+        ax.legend()
+        
+        st.pyplot(fig)
