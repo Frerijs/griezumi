@@ -1,5 +1,8 @@
+# app.py
+
 import os
 import glob
+import zipfile
 import xml.etree.ElementTree as ET
 import numpy as np
 import pandas as pd
@@ -14,483 +17,314 @@ import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import base64
 from io import BytesIO
+import streamlit as st
+import tempfile
 
-# ===================================================================
-# 1. Papildu funkcija, lai pārbaudītu Shapefile kopumu
-# ===================================================================
-def check_shapefile_completeness(shp_file):
-    """
-    Pārbauda, vai Shapefile (shp, shx, dbf, prj) komplekts ir pilns.
-    Ja trūkst kāds no failiem, izmet FileNotFoundError.
-    """
-    required_extensions = [".shp", ".shx", ".dbf", ".prj"]  # Varat pielāgot atbilstoši vajadzībai
+# === 1. Definēt ceļus ===
 
-    # No ceļa “fails.shp” atdalīt pamatnosaukumu “fails”
-    shp_base, shp_ext = os.path.splitext(shp_file)
-    missing_files = []
-    for ext in required_extensions:
-        candidate = shp_base + ext
-        if not os.path.exists(candidate):
-            missing_files.append(candidate)
+st.title("Šķērsgriezumu Profili")
 
-    if missing_files:
-        raise FileNotFoundError(
-            "Shapefile komplekts nav pilnīgs. Trūkst šādi faili:\n  " + "\n  ".join(missing_files)
-        )
+st.sidebar.header("Iestatījumi")
 
-# ===================================================================
-# 2. Definēt ceļus
-# ===================================================================
+# Izveidojam pagaidu mapes, lai glabātu augšupielādētos failus
+with tempfile.TemporaryDirectory() as tmpdirname:
+    shp_dir = os.path.join(tmpdirname, 'linijas')
+    surface_dir = os.path.join(tmpdirname, 'virsmas')
+    ortho_dir = os.path.join(tmpdirname, 'ortofoto')
+    output_dir = os.path.join(tmpdirname, 'out')
 
-# SHP līniju ceļš
-shp_dir = r'C:\EF\skripti\GRIEZUMI_landXML_DEM\DATI\linijas'
+    os.makedirs(shp_dir, exist_ok=True)
+    os.makedirs(surface_dir, exist_ok=True)
+    os.makedirs(ortho_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
 
-# Virsmu (LandXML un DEM) ceļš
-surface_dir = r'C:\EF\skripti\GRIEZUMI_landXML_DEM\DATI\virsmas'
+    st.write("## Repozitorija Informācija")
+    st.write("Šī lietotne analizē SHP failus, virsmas (LandXML un DEM) un ortofoto datus, lai ģenerētu šķērsgriezumu profilus.")
 
-# Ortofoto ceļš
-ortho_dir = r'C:\EF\skripti\GRIEZUMI_landXML_DEM\DATI\ortofoto'
+    # === 2. Datu Augšupielāde ===
 
-# Izvades ceļš
-output_dir = r'C:\EF\skripti\GRIEZUMI_landXML_DEM\DATI\out'
+    st.sidebar.header("Datu Ielāde")
 
-# Pārliecināties, ka izvades mape eksistē
-if not os.path.exists(output_dir):
-    os.makedirs(output_dir)
+    # 2.1. Augšupielādēt Linijas (SHP) ZIP arhīvu
+    st.sidebar.subheader("Linijas (SHP)")
+    uploaded_shp_zip = st.sidebar.file_uploader("Augšupielādēt Linijas ZIP (satur .shp, .shx, .dbf, utt.)", type=["zip"], key="shp_zip")
 
-# ===================================================================
-# 3. Nolasa SHP failus no mapes
-# ===================================================================
-
-print("Nolasa SHP failus...")
-
-# Atrod visus SHP failus mapē 'linijas'
-shp_files = glob.glob(os.path.join(shp_dir, '*.shp'))
-
-if not shp_files:
-    print("Mapē nav atrasti SHP faili. Lūdzu, pārbaudiet mapes ceļu un failus.")
-    exit()
-
-# ===================================================================
-# 4. Nolasa virsmas (LandXML un DEM) un izveido interpolatorus
-# ===================================================================
-
-print("Nolasa virsmas...")
-
-# Izveido vārdnīcu, kurā glabāsies interpolatori vai DEM objekti katrai virsmai
-surface_interpolators = {}
-surface_rasters = {}
-surface_types = {}  # 'landxml' vai 'dem'
-
-# Atrod visus LandXML un DEM failus norādītajā mapē
-landxml_files = glob.glob(os.path.join(surface_dir, '*.xml'))
-dem_files = glob.glob(os.path.join(surface_dir, '*.tif'))  # Pieņemot, ka DEM faili ir GeoTIFF formātā
-
-if not landxml_files and not dem_files:
-    print("Mapē nav atrasti LandXML vai DEM faili. Lūdzu, pārbaudiet mapes ceļu un failus.")
-    exit()
-
-# -----------------------------------------------------------
-# 4.1. Apstrādā LandXML virsmas
-# -----------------------------------------------------------
-for landxml_file in landxml_files:
-    surface_name = os.path.splitext(os.path.basename(landxml_file))[0]
-    surface_name = surface_name + '_xml'  # Pievienot sufiksu, lai atšķirtu no DEM virsmām
-    print(f"Nolasa LandXML virsmu: {surface_name}")
-    tree = ET.parse(landxml_file)
-    root = tree.getroot()
-    ns = {'landxml': 'http://www.landxml.org/schema/LandXML-1.0'}
-
-    # Izvilkt punktus no <PntList3D> elementiem
-    all_coords = []
-    pnt_list3d = root.findall('.//{*}PntList3D')
-    for pnt_list in pnt_list3d:
-        text = pnt_list.text.strip()
-        points = text.split()
-        for i in range(0, len(points), 3):
-            x = float(points[i])
-            y = float(points[i+1])
-            z = float(points[i+2])
-            all_coords.append([x, y, z])
-
-    # Izvilkt punktus no <P> elementiem
-    p_elements = root.findall('.//{*}P')
-    for p in p_elements:
-        text = p.text.strip()
-        if text:
-            points = text.split()
-            x = float(points[0])
-            y = float(points[1])
-            z = float(points[2])
-            all_coords.append([x, y, z])
-
-    # Pārbaudīt, vai ir atrasti punkti
-    if not all_coords:
-        print(f"Virsmā {surface_name} nav atrasti punkti.")
-        continue
-
-    # Pārveidot uz NumPy masīvu
-    coords = np.array(all_coords)
-    coords_xy = coords[:, :2]
-    z_coords = coords[:, 2]
-
-    # Pārbaudīt, vai ir pietiekami daudz punktu interpolācijai
-    if coords.shape[0] < 3:
-        print(f"Nepietiek punktu virsmas {surface_name} interpolācijai.")
-        continue
-
-    # Izveidot interpolācijas funkciju virsmai
-    print(f"Izveido interpolācijas funkciju virsmai {surface_name}...")
-    tri = Delaunay(coords_xy)
-    interpolator = LinearNDInterpolator(tri, z_coords)
-
-    # Saglabāt interpolatoru un virsmas tipu
-    surface_interpolators[surface_name] = interpolator
-    surface_types[surface_name] = 'landxml'
-
-    # Izdrukāt virsmas informāciju
-    print(f"Virsmā {surface_name} ir {len(z_coords)} punkti.")
-
-# -----------------------------------------------------------
-# 4.2. Apstrādā DEM virsmas
-# -----------------------------------------------------------
-for dem_file in dem_files:
-    surface_name = os.path.splitext(os.path.basename(dem_file))[0]
-    surface_name = surface_name + '_dem'  # Pievienot sufiksu, lai atšķirtu no LandXML virsmām
-    print(f"Nolasa DEM virsmu: {surface_name}")
-    dem_dataset = rasterio.open(dem_file)
-
-    # Pārliecināties, ka DEM ir EPSG:3059 koordinātu sistēmā
-    if dem_dataset.crs.to_epsg() != 3059:
-        print(f"Pārvērš DEM virsmas {surface_name} koordinātu sistēmā uz EPSG:3059.")
-        vrt_params = {'crs': 'EPSG:3059'}
-        dem_dataset = WarpedVRT(dem_dataset, **vrt_params)
-
-    # Saglabāt DEM datasetu un virsmas tipu
-    surface_rasters[surface_name] = dem_dataset
-    surface_types[surface_name] = 'dem'
-
-    # Izdrukāt DEM informāciju
-    print(f"DEM virsmas {surface_name} izmēri: {dem_dataset.width} x {dem_dataset.height}")
-
-# Pārbaudīt, vai ir izveidotas virsmas
-if not surface_interpolators and not surface_rasters:
-    print("Nav atrastas derīgas virsmas apstrādei.")
-    exit()
-
-# ===================================================================
-# 5. Nolasa ortofoto
-# ===================================================================
-ortho_files = glob.glob(os.path.join(ortho_dir, '*.tif'))
-
-if not ortho_files:
-    print("Mapē nav atrasti ortofoto faili. Lūdzu, pārbaudiet mapes ceļu un failus.")
-    exit()
-
-# Pieņemam, ka ir viens ortofoto fails
-ortho_file = ortho_files[0]
-print(f"Nolasa ortofoto: {ortho_file}")
-ortho_dataset = rasterio.open(ortho_file)
-
-# Pārliecināties, ka ortofoto ir EPSG:3059 koordinātu sistēmā
-if ortho_dataset.crs.to_epsg() != 3059:
-    print(f"Pārvērš ortofoto koordinātu sistēmu uz EPSG:3059.")
-    vrt_params = {'crs': 'EPSG:3059'}
-    ortho_dataset = WarpedVRT(ortho_dataset, **vrt_params)
-
-# ===================================================================
-# 6. Sagatavojam HTML satura daļas
-# ===================================================================
-html_header = '''
-<html>
-<head>
-    <title>Šķērsgriezumu Profili</title>
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-    <style>
-    body {
-        font-family: Arial, sans-serif;
-        margin: 20px;
-    }
-    h2 {
-        margin-top: 50px;
-    }
-    table {
-        border-collapse: collapse;
-        width: 100%;
-        margin-bottom: 30px;
-    }
-    th, td {
-        border: 1px solid black;
-        text-align: left;
-        padding: 5px;
-    }
-    img {
-        max-width: 100%;
-        height: auto;
-        margin-bottom: 20px;
-    }
-    /* Nodrošina, ka Plotly grafiki aizņem visu pieejamo platumu */
-    .plotly-graph-div {
-        width: 100% !important;
-    }
-    </style>
-</head>
-<body>
-'''
-html_content = html_header
-
-# JavaScript kods interaktivitātei
-javascript_code = '''
-<script>
-    // JavaScript kods interaktivitātei
-</script>
-'''
-
-# ===================================================================
-# 7. Palīgfunkcija ortofoto attēlam
-# ===================================================================
-def generate_map_image(line_geom, points_gdf, ortho_dataset):
-    """
-    Ģenerē kartes attēlu ar šķērsgriezuma līniju un punktiem, pārklājot tos uz ortofoto.
-    Attēlu saglabā kā Base64 kodētu virkni.
-    """
-    fig, ax = plt.subplots(figsize=(8, 8))
-
-    # Attēlojam ortofoto
-    rasterio.plot.show(ortho_dataset, ax=ax)
-
-    # Attēlojam griezuma līniju
-    x_line, y_line = line_geom.xy
-    ax.plot(x_line, y_line, color='red', linewidth=3, label='Griezuma līnija')  # Palielinām linewidth
-
-    # Attēlojam punktus
-    points_gdf.plot(ax=ax, marker='o', color='yellow', markersize=10, label='Punkti')  # Samazinām markersize un mainām krāsu
-
-    # Noņemam asu nosaukumus
-    ax.axis('off')
-
-    # Iestatām kartes robežas pēc griezuma un punktu ģeometrijām
-    all_geoms = [line_geom] + list(points_gdf.geometry)
-    total_bounds = gpd.GeoSeries(all_geoms).total_bounds
-    x_min, y_min, x_max, y_max = total_bounds
-    x_margin = (x_max - x_min) * 0.1
-    y_margin = (y_max - y_min) * 0.1
-    ax.set_xlim(x_min - x_margin, x_max + x_margin)
-    ax.set_ylim(y_min - y_margin, y_max + y_margin)
-
-    # Saglabājam attēlu BytesIO objektā
-    buf = BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
-    plt.close(fig)
-    buf.seek(0)
-    image_base64 = base64.b64encode(buf.read()).decode('utf-8')
-    return image_base64
-
-# ===================================================================
-# 8. Apstrādā katru SHP failu
-# ===================================================================
-for shp_file in shp_files:
-    print(f"Apstrādā SHP failu: {shp_file}")
-
-    # ---------------------------------------------------------------
-    # Jaunums: pārbaudām, vai ir klāt .shp, .shx, .dbf, .prj utt.
-    # ---------------------------------------------------------------
-    check_shapefile_completeness(shp_file)
-
-    lines_gdf = gpd.read_file(shp_file)
-
-    # Pārbaudīt SHP faila koordinātu sistēmu
-    if lines_gdf.crs is None:
-        print(f"SHP failam {shp_file} nav norādīta koordinātu sistēma.")
-        # Ja zināt, kāda koordinātu sistēma tiek izmantota, piešķiriet to šeit
-        # lines_gdf.crs = 'EPSG:XXXX'
+    if uploaded_shp_zip is not None:
+        with zipfile.ZipFile(uploaded_shp_zip) as z:
+            z.extractall(shp_dir)
+        st.sidebar.success("Linijas faili augšupielādēti un izvilkti veiksmīgi!")
     else:
-        print(f"SHP faila {shp_file} koordinātu sistēma: {lines_gdf.crs}")
+        st.sidebar.info("Lūdzu, augšupielādējiet Linijas ZIP arhīvu.")
 
-    # Ja nepieciešams, pārvērst uz EPSG:3059
-    if lines_gdf.crs and lines_gdf.crs.to_epsg() != 3059:
-        print(f"Pārvērš SHP faila koordinātu sistēmu uz EPSG:3059.")
-        lines_gdf = lines_gdf.to_crs(epsg=3059)
+    # 2.2. Augšupielādēt Virsmas (LandXML un DEM)
+    st.sidebar.subheader("Virsmas (LandXML un DEM)")
+    uploaded_landxml = st.sidebar.file_uploader("Augšupielādēt LandXML faili (.xml)", type=["xml"], accept_multiple_files=True, key="landxml")
+    uploaded_dem = st.sidebar.file_uploader("Augšupielādēt DEM faili (.tif)", type=["tif"], accept_multiple_files=True, key="dem")
 
-    # Apstrādā katru līniju SHP failā
-    for idx, row in lines_gdf.iterrows():
-        geom = row.geometry
-        if geom is None:
-            continue
+    if uploaded_landxml:
+        for file in uploaded_landxml:
+            with open(os.path.join(surface_dir, file.name), 'wb') as f:
+                f.write(file.getbuffer())
+        st.sidebar.success("LandXML faili augšupielādēti veiksmīgi!")
 
-        # Izgūstam ID no atribūtu tabulas (case-insensitive)
-        attribute_fields = {field.lower(): field for field in lines_gdf.columns}
-        if 'id' in attribute_fields:
-            line_attribute_id = row[attribute_fields['id']]
-            # Pārbaudām, vai ID nav tukšs
-            if pd.isna(line_attribute_id) or str(line_attribute_id).strip() == '':
-                print(f"Brīdinājums: SHP faila {shp_file} līnijai indeksā {idx} ID lauks ir tukšs.")
-                line_attribute_id = "nav ID"
-            else:
-                # Nodrošinām, ka ID ir teksta formātā un nav komatiem
-                line_attribute_id = str(line_attribute_id).replace(',', '').strip()
-        else:
-            print(f"Brīdinājums: SHP faila {shp_file} lauks 'id' vai 'ID' nav atrasts. Lieto 'nav ID'.")
-            line_attribute_id = "nav ID"  # Ja nav ID lauka, lieto "nav ID"
+    if uploaded_dem:
+        for file in uploaded_dem:
+            with open(os.path.join(surface_dir, file.name), 'wb') as f:
+                f.write(file.getbuffer())
+        st.sidebar.success("DEM faili augšupielādēti veiksmīgi!")
 
-        if geom.geom_type == 'LineString':
-            line = geom
-            # Izveidot unikālu identifikatoru līnijai
-            line_id = f"{os.path.splitext(os.path.basename(shp_file))[0]}_{line_attribute_id}"
-            # Zemāk turpinās apstrāde ar line
+    if not (uploaded_landxml or uploaded_dem):
+        st.sidebar.info("Lūdzu, augšupielādējiet Virsmas failus.")
 
-            # Izdrukāt līnijas koordinātu diapazonus
-            print(f"Līnijas {line_id} X koordinātu diapazons: {line.bounds[0]} - {line.bounds[2]}")
-            print(f"Līnijas {line_id} Y koordinātu diapazons: {line.bounds[1]} - {line.bounds[3]}")
+    # 2.3. Augšupielādēt Ortofoto (GeoTIFF vai ZIP)
+    st.sidebar.subheader("Ortofoto")
+    uploaded_ortho_zip = st.sidebar.file_uploader("Augšupielādēt Ortofoto ZIP (satur .tif)", type=["zip"], key="ortho_zip")
+    uploaded_ortho = st.sidebar.file_uploader("Augšupielādēt Ortofoto faili (.tif)", type=["tif"], accept_multiple_files=True, key="ortho_files")
 
-            # Izveidot punktus gar līniju (sampling)
-            num_points = 500  # Punktu skaits gar līniju, pielāgojiet pēc vajadzības
-            distances = np.linspace(0, line.length, num_points)
-            points = [line.interpolate(distance) for distance in distances]
+    if uploaded_ortho_zip is not None:
+        with zipfile.ZipFile(uploaded_ortho_zip) as z:
+            z.extractall(ortho_dir)
+        st.sidebar.success("Ortofoto faili augšupielādēti un izvilkti veiksmīgi!")
+    elif uploaded_ortho:
+        for file in uploaded_ortho:
+            with open(os.path.join(ortho_dir, file.name), 'wb') as f:
+                f.write(file.getbuffer())
+        st.sidebar.success("Ortofoto faili augšupielādēti veiksmīgi!")
+    else:
+        st.sidebar.info("Lūdzu, augšupielādējiet Ortofoto failus.")
 
-            # Izvilkt X un Y koordinātas priekš attēlošanas (bez koordinātu apmaiņas)
-            x_coords = np.array([point.x for point in points])
-            y_coords = np.array([point.y for point in points])
+    # === 3. Nolasa SHP failus no mapes ===
 
-            # Izveidot GeoDataFrame punktiem priekš attēlošanas
-            points_gdf = gpd.GeoDataFrame({'geometry': points}, crs='EPSG:3059')
+    st.header("Ielādētie Dati")
 
-            # Izveidot DataFrame šķērsgriezuma datiem
-            df = pd.DataFrame({'Distance': distances})
+    @st.cache(allow_output_mutation=True)
+    def load_shp_files(shp_directory):
+        shp_files = glob.glob(os.path.join(shp_directory, '*.shp'))
+        if not shp_files:
+            st.error("Mapē nav atrasti SHP faili. Lūdzu, pārbaudiet augšupielādētos failus.")
+        return shp_files
 
-            # Interpolēt Z vērtības no katras virsmas
-            for surface_name in surface_types.keys():
-                surface_type = surface_types[surface_name]
+    shp_files = load_shp_files(shp_dir)
 
-                if surface_type == 'landxml':
-                    interpolator = surface_interpolators[surface_name]
-                    # Apmainām koordinātas LandXML virsmām
-                    x_coords_swapped, y_coords_swapped = y_coords, x_coords
-                    # Interpolēt Z vērtības, izmantojot apmainītās koordinātas
-                    z_values = interpolator(x_coords_swapped, y_coords_swapped)
-                    # Apstrādāt NaN vērtības
-                    nan_indices = np.isnan(z_values)
-                    if np.all(nan_indices):
-                        print(f"Visi punkti līnijā {line_id} atrodas ārpus virsmas {surface_name}.")
-                        continue
-                    elif np.any(nan_indices):
-                        print(f"Brīdinājums: Daži punkti līnijā {line_id} atrodas ārpus virsmas {surface_name}.")
-                    # Pievienot Z vērtības DataFrame
-                    df[f'Elevation_{surface_name}'] = z_values
+    if shp_files:
+        st.write("### Atrasti SHP faili:")
+        for shp in shp_files:
+            st.write(f"- {os.path.basename(shp)}")
+    else:
+        st.stop()
 
-                elif surface_type == 'dem':
-                    dem_dataset = surface_rasters[surface_name]
-                    # DEM virsmām koordinātas atstājam nemainītas
-                    # Pārveidot koordinātas uz rindu un kolonnu indeksiem
-                    row_indices, col_indices = dem_dataset.index(x_coords, y_coords)
-                    z_values = []
-                    dem_data = dem_dataset.read(1)
-                    nodata = dem_dataset.nodata
-                    for row_idx, col_idx in zip(row_indices, col_indices):
-                        try:
-                            value = dem_data[row_idx, col_idx]
-                            if value == nodata:
-                                z_values.append(np.nan)
-                            else:
-                                z_values.append(value)
-                        except IndexError:
-                            z_values.append(np.nan)
-                    z_values = np.array(z_values)
-                    # Apstrādāt NaN vērtības
-                    nan_indices = np.isnan(z_values)
-                    if np.all(nan_indices):
-                        print(f"Visi punkti līnijā {line_id} atrodas ārpus DEM virsmas {surface_name}.")
-                        continue
-                    elif np.any(nan_indices):
-                        print(f"Brīdinājums: Daži punkti līnijā {line_id} atrodas ārpus DEM virsmas {surface_name}.")
-                    # Pievienot Z vērtības DataFrame
-                    df[f'Elevation_{surface_name}'] = z_values
+    # === 4. Nolasa virsmas (LandXML un DEM) un izveido interpolatorus ===
 
-            # Pārbaudīt, vai DataFrame satur Z vērtības
-            elevation_columns = [col for col in df.columns if col.startswith('Elevation_')]
-            if not elevation_columns:
-                print(f"Līnija {line_id} nav derīgu Z vērtību. Izlaižam.")
+    @st.cache(allow_output_mutation=True)
+    def load_surfaces(surface_directory):
+        surface_interpolators = {}
+        surface_rasters = {}
+        surface_types = {}
+
+        landxml_files = glob.glob(os.path.join(surface_directory, '*.xml'))
+        dem_files = glob.glob(os.path.join(surface_directory, '*.tif'))
+
+        if not landxml_files and not dem_files:
+            st.error("Mapē nav atrasti LandXML vai DEM faili. Lūdzu, pārbaudiet augšupielādētos failus.")
+            return surface_interpolators, surface_rasters, surface_types
+
+        # Apstrādā LandXML virsmas
+        for landxml_file in landxml_files:
+            surface_name = os.path.splitext(os.path.basename(landxml_file))[0] + '_xml'
+            tree = ET.parse(landxml_file)
+            root = tree.getroot()
+            ns = {'landxml': 'http://www.landxml.org/schema/LandXML-1.0'}
+
+            all_coords = []
+            pnt_list3d = root.findall('.//{*}PntList3D')
+            for pnt_list in pnt_list3d:
+                text = pnt_list.text.strip()
+                points = text.split()
+                for i in range(0, len(points), 3):
+                    x = float(points[i])
+                    y = float(points[i+1])
+                    z = float(points[i+2])
+                    all_coords.append([x, y, z])
+
+            p_elements = root.findall('.//{*}P')
+            for p in p_elements:
+                text = p.text.strip()
+                if text:
+                    points = text.split()
+                    x = float(points[0])
+                    y = float(points[1])
+                    z = float(points[2])
+                    all_coords.append([x, y, z])
+
+            if not all_coords:
+                st.warning(f"Virsmā {surface_name} nav atrasti punkti.")
                 continue
 
-            # Izdrukāt DataFrame kolonnas
-            print(f"DataFrame kolonnas: {df.columns.tolist()}")
-            # Izdrukāt DataFrame galveni
-            print(df.head())
+            coords = np.array(all_coords)
+            coords_xy = coords[:, :2]
+            z_coords = coords[:, 2]
 
-            # === 5.1. Izveidot grafiku ar Plotly ===
-            fig = go.Figure()
-            for elevation_col in elevation_columns:
-                surface_name = elevation_col.replace('Elevation_', '')
-                fig.add_trace(go.Scatter(
-                    x=df['Distance'],
-                    y=df[elevation_col],
-                    mode='lines',
-                    name=surface_name,
-                    connectgaps=False  # Nenovērš pārrāvumus
-                ))
-            fig.update_layout(
-                xaxis_title='Attālums gar līniju (m)',
-                yaxis_title='Augstums (m)',
-                template='plotly_white',
-                height=500,  # Fiksēts vertikālais izmērs
-                autosize=True,  # Ļauj Plotly automātiski pielāgot platumu
-                margin=dict(l=50, r=50, t=50, b=50),
-                xaxis=dict(range=[0, line.length])
-            )
+            if coords.shape[0] < 3:
+                st.warning(f"Nepietiek punktu virsmas {surface_name} interpolācijai.")
+                continue
 
-            # Ģenerēt grafika HTML kodu ar responsīvu konfigurāciju
-            fig_html = fig.to_html(
-                full_html=False,
-                include_plotlyjs=False,
-                div_id=f'plot_{line_id}',
-                config={'responsive': True}
-            )
+            tri = Delaunay(coords_xy)
+            interpolator = LinearNDInterpolator(tri, z_coords)
 
-            # === 5.2. Ģenerēt ortofoto attēlu kā Base64 ===
-            map_image_base64 = generate_map_image(line, points_gdf, ortho_dataset)
+            surface_interpolators[surface_name] = interpolator
+            surface_types[surface_name] = 'landxml'
 
-            # === 5.3. Pievienot saturu HTML failam ===
-            if isinstance(line_attribute_id, (int, float)):
-                line_attribute_id_str = f"{line_attribute_id}"
+        # Apstrādā DEM virsmas
+        for dem_file in dem_files:
+            surface_name = os.path.splitext(os.path.basename(dem_file))[0] + '_dem'
+            dem_dataset = rasterio.open(dem_file)
+
+            if dem_dataset.crs.to_epsg() != 3059:
+                vrt_params = {'crs': 'EPSG:3059'}
+                dem_dataset = WarpedVRT(dem_dataset, **vrt_params)
+
+            surface_rasters[surface_name] = dem_dataset
+            surface_types[surface_name] = 'dem'
+
+        return surface_interpolators, surface_rasters, surface_types
+
+    surface_interpolators, surface_rasters, surface_types = load_surfaces(surface_dir)
+
+    if not surface_interpolators and not surface_rasters:
+        st.error("Nav atrastas derīgas virsmas apstrādei.")
+        st.stop()
+    else:
+        st.success("Virsmas ielādētas veiksmīgi!")
+
+    # === 5. Nolasa ortofoto ===
+
+    @st.cache(allow_output_mutation=True)
+    def load_ortho(ortho_directory):
+        ortho_files = glob.glob(os.path.join(ortho_directory, '*.tif'))
+        if not ortho_files:
+            st.error("Mapē nav atrasti ortofoto faili. Lūdzu, pārbaudiet augšupielādētos failus.")
+            return None
+
+        ortho_file = ortho_files[0]
+        ortho_dataset = rasterio.open(ortho_file)
+
+        if ortho_dataset.crs.to_epsg() != 3059:
+            vrt_params = {'crs': 'EPSG:3059'}
+            ortho_dataset = WarpedVRT(ortho_dataset, **vrt_params)
+
+        return ortho_dataset
+
+    ortho_dataset = load_ortho(ortho_dir)
+
+    if ortho_dataset:
+        st.success(f"Ortofoto ielādēts: {os.path.basename(ortho_dataset.name)}")
+    else:
+        st.stop()
+
+    # === 6. Apstrādā katru SHP failu ===
+
+    def generate_map_image(line_geom, points_gdf, ortho_dataset):
+        fig, ax = plt.subplots(figsize=(8, 8))
+
+        rasterio.plot.show(ortho_dataset, ax=ax)
+        x_line, y_line = line_geom.xy
+        ax.plot(x_line, y_line, color='red', linewidth=3, label='Griezuma līnija')
+        points_gdf.plot(ax=ax, marker='o', color='yellow', markersize=10, label='Punkti')
+
+        ax.axis('off')
+
+        all_geoms = [line_geom] + list(points_gdf.geometry)
+        total_bounds = gpd.GeoSeries(all_geoms).total_bounds
+        x_min, y_min, x_max, y_max = total_bounds
+        x_margin = (x_max - x_min) * 0.1
+        y_margin = (y_max - y_min) * 0.1
+        ax.set_xlim(x_min - x_margin, x_max + x_margin)
+        ax.set_ylim(y_min - y_margin, y_max + y_margin)
+
+        buf = BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
+        plt.close(fig)
+        buf.seek(0)
+        image_base64 = base64.b64encode(buf.read()).decode('utf-8')
+        return image_base64
+
+    st.header("Šķērsgriezumu Profili")
+
+    for shp_file in shp_files:
+        st.subheader(f"Apstrādā SHP failu: {os.path.basename(shp_file)}")
+        lines_gdf = gpd.read_file(shp_file)
+
+        if lines_gdf.crs is None:
+            st.warning(f"SHP failam {os.path.basename(shp_file)} nav norādīta koordinātu sistēma.")
+        else:
+            st.write(f"SHP faila koordinātu sistēma: {lines_gdf.crs}")
+
+        if lines_gdf.crs and lines_gdf.crs.to_epsg() != 3059:
+            lines_gdf = lines_gdf.to_crs(epsg=3059)
+            st.write("Koordinātu sistēma pārvērsta uz EPSG:3059.")
+
+        for idx, row in lines_gdf.iterrows():
+            geom = row.geometry
+            if geom is None:
+                continue
+
+            attribute_fields = {field.lower(): field for field in lines_gdf.columns}
+            if 'id' in attribute_fields:
+                line_attribute_id = row[attribute_fields['id']]
+                if pd.isna(line_attribute_id) or str(line_attribute_id).strip() == '':
+                    st.warning(f"SHP faila {os.path.basename(shp_file)} līnijai indeksā {idx} ID lauks ir tukšs.")
+                    line_attribute_id = "nav ID"
+                else:
+                    line_attribute_id = str(line_attribute_id).replace(',', '').strip()
             else:
-                line_attribute_id_str = str(line_attribute_id).replace(',', '').strip()
+                st.warning(f"SHP faila {os.path.basename(shp_file)} lauks 'id' vai 'ID' nav atrasts. Lieto 'nav ID'.")
+                line_attribute_id = "nav ID"
 
-            html_content += f"<h2 id='griezums_{line_id}'>Griezums: {line_attribute_id_str}</h2>\n"
-            html_content += f"<div style='text-align: center;'><img src='data:image/png;base64,{map_image_base64}' alt='Karte griezumam {line_attribute_id_str}'></div>\n"
-            html_content += fig_html + "\n"
+            if geom.geom_type == 'LineString':
+                line = geom
+                line_id = f"{os.path.splitext(os.path.basename(shp_file))[0]}_{line_attribute_id}"
+                parts = [line]
+            elif geom.geom_type == 'MultiLineString':
+                parts = geom
+            else:
+                continue
 
-        elif geom.geom_type == 'MultiLineString':
-            # Ja ir MultiLineString, apstrādā katru daļu atsevišķi
-            for part_idx, part in enumerate(geom):
-                line = part
-                # Izveidot unikālu identifikatoru
-                line_id = f"{os.path.splitext(os.path.basename(shp_file))[0]}_{line_attribute_id}_part{part_idx}"
+            for part_idx, part in enumerate(parts):
+                if geom.geom_type == 'LineString':
+                    current_line_id = line_id
+                else:
+                    current_line_id = f"{os.path.splitext(os.path.basename(shp_file))[0]}_{line_attribute_id}_part{part_idx}"
 
-                print(f"Līnijas {line_id} X koordinātu diapazons: {line.bounds[0]} - {line.bounds[2]}")
-                print(f"Līnijas {line_id} Y koordinātu diapazons: {line.bounds[1]} - {line.bounds[3]}")
+                st.write(f"### Līnijas {current_line_id}")
+                st.write(f"X koordinātu diapazons: {part.bounds[0]} - {part.bounds[2]}")
+                st.write(f"Y koordinātu diapazons: {part.bounds[1]} - {part.bounds[3]}")
 
-                num_points = 500
-                distances = np.linspace(0, line.length, num_points)
-                points = [line.interpolate(distance) for distance in distances]
+                num_points = st.sidebar.number_input(f"Punktu skaits līnijā {current_line_id}", min_value=100, max_value=1000, value=500, key=current_line_id)
+                distances = np.linspace(0, part.length, num_points)
+                points = [part.interpolate(distance) for distance in distances]
+
                 x_coords = np.array([point.x for point in points])
                 y_coords = np.array([point.y for point in points])
+
                 points_gdf = gpd.GeoDataFrame({'geometry': points}, crs='EPSG:3059')
+
                 df = pd.DataFrame({'Distance': distances})
 
-                # Interpolēt Z vērtības no katras virsmas
                 for surface_name in surface_types.keys():
                     surface_type = surface_types[surface_name]
+
                     if surface_type == 'landxml':
                         interpolator = surface_interpolators[surface_name]
                         x_coords_swapped, y_coords_swapped = y_coords, x_coords
                         z_values = interpolator(x_coords_swapped, y_coords_swapped)
                         nan_indices = np.isnan(z_values)
                         if np.all(nan_indices):
-                            print(f"Visi punkti līnijā {line_id} atrodas ārpus virsmas {surface_name}.")
+                            st.warning(f"Visi punkti līnijā {current_line_id} atrodas ārpus virsmas {surface_name}.")
                             continue
                         elif np.any(nan_indices):
-                            print(f"Brīdinājums: Daži punkti līnijā {line_id} atrodas ārpus virsmas {surface_name}.")
+                            st.warning(f"Daži punkti līnijā {current_line_id} atrodas ārpus virsmas {surface_name}.")
                         df[f'Elevation_{surface_name}'] = z_values
+
                     elif surface_type == 'dem':
                         dem_dataset = surface_rasters[surface_name]
                         row_indices, col_indices = dem_dataset.index(x_coords, y_coords)
@@ -509,30 +343,34 @@ for shp_file in shp_files:
                         z_values = np.array(z_values)
                         nan_indices = np.isnan(z_values)
                         if np.all(nan_indices):
-                            print(f"Visi punkti līnijā {line_id} atrodas ārpus DEM virsmas {surface_name}.")
+                            st.warning(f"Visi punkti līnijā {current_line_id} atrodas ārpus DEM virsmas {surface_name}.")
                             continue
                         elif np.any(nan_indices):
-                            print(f"Brīdinājums: Daži punkti līnijā {line_id} atrodas ārpus DEM virsmas {surface_name}.")
+                            st.warning(f"Daži punkti līnijā {current_line_id} atrodas ārpus DEM virsmas {surface_name}.")
                         df[f'Elevation_{surface_name}'] = z_values
 
                 elevation_columns = [col for col in df.columns if col.startswith('Elevation_')]
                 if not elevation_columns:
-                    print(f"Līnija {line_id} nav derīgu Z vērtību. Izlaižam.")
+                    st.warning(f"Līnija {current_line_id} nav derīgu Z vērtību. Izlaižam.")
                     continue
 
-                print(f"DataFrame kolonnas: {df.columns.tolist()}")
-                print(df.head())
+                st.write("#### Datu Pārskats")
+                st.dataframe(df.head())
+
+                # === 6.1. Izveidot grafiku ar Plotly ===
 
                 fig = go.Figure()
+
                 for elevation_col in elevation_columns:
-                    s_name = elevation_col.replace('Elevation_', '')
+                    surface_name = elevation_col.replace('Elevation_', '')
                     fig.add_trace(go.Scatter(
                         x=df['Distance'],
                         y=df[elevation_col],
                         mode='lines',
-                        name=s_name,
+                        name=surface_name,
                         connectgaps=False
                     ))
+
                 fig.update_layout(
                     xaxis_title='Attālums gar līniju (m)',
                     yaxis_title='Augstums (m)',
@@ -540,38 +378,22 @@ for shp_file in shp_files:
                     height=500,
                     autosize=True,
                     margin=dict(l=50, r=50, t=50, b=50),
-                    xaxis=dict(range=[0, line.length])
-                )
-                fig_html = fig.to_html(
-                    full_html=False,
-                    include_plotlyjs=False,
-                    div_id=f'plot_{line_id}',
-                    config={'responsive': True}
+                    xaxis=dict(range=[0, part.length])
                 )
 
-                map_image_base64 = generate_map_image(line, points_gdf, ortho_dataset)
+                # === 6.2. Ģenerēt ortofoto attēlu kā Base64 ===
+
+                map_image_base64 = generate_map_image(part, points_gdf, ortho_dataset)
+
+                # === 6.3. Pievienot saturu HTML failam ===
+
                 if isinstance(line_attribute_id, (int, float)):
                     line_attribute_id_str = f"{line_attribute_id}"
                 else:
                     line_attribute_id_str = str(line_attribute_id).replace(',', '').strip()
 
-                html_content += f"<h2 id='griezums_{line_id}'>Griezums: {line_attribute_id_str}</h2>\n"
-                html_content += f"<div style='text-align: center;'><img src='data:image/png;base64,{map_image_base64}' alt='Karte griezumam {line_attribute_id_str}'></div>\n"
-                html_content += fig_html + "\n"
-        else:
-            # Ja ģeometrija nav Linestring, izlaiž
-            continue
+                st.markdown(f"### Griezums: {line_attribute_id_str}")
+                st.image(f'data:image/png;base64,{map_image_base64}', use_column_width=True, caption=f'Karte griezumam {line_attribute_id_str}')
+                st.plotly_chart(fig, use_container_width=True)
 
-# ===================================================================
-# 9. Pabeidzam HTML failu un saglabājam
-# ===================================================================
-html_content += javascript_code
-html_content += "\n</body></html>"
-
-# Saglabājam HTML failu
-output_html_file = os.path.join(output_dir, 'skersgriezumi.html')
-with open(output_html_file, 'w', encoding='utf-8') as f:
-    f.write(html_content)
-
-print(f"HTML fails veiksmīgi saglabāts: {output_html_file}")
-print("Process pabeigts.")
+    st.success("Apstrāde pabeigta!")
