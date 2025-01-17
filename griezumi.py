@@ -23,7 +23,8 @@ def load_landxml(filepath):
     
     for tri in root.findall(".//ns:Triangle", ns):
         p1, p2, p3 = tri.text.split()
-        triangles.append((points[p1], points[p2], points[p3]))
+        if p1 in points and p2 in points and p3 in points:
+            triangles.append((points[p1], points[p2], points[p3]))
     
     return triangles
 
@@ -96,6 +97,8 @@ if landxml_files and shp_files:
             landxml_surfaces[landxml_file.name] = triangles
         
         st.write("Ielādētas SHP līnijas un LandXML virsmas.")
+        st.write(f"Atrastas {len(gdf)} līnijas no SHP faila.")
+        st.write(f"LandXML virsmas: {[key for key in landxml_surfaces.keys()]}")
         
         fig, ax = plt.subplots()
         
@@ -106,6 +109,8 @@ if landxml_files and shp_files:
                 if profile:
                     x_vals, y_vals, z_vals = zip(*profile)
                     ax.plot(x_vals, z_vals, label=f"{surface_name} - Līnija {row.name}")
+                else:
+                    st.write(f"Brīdinājums: Nav aprēķināts griezums {surface_name} - Līnija {row.name}")
         
         ax.set_xlabel("Attālums")
         ax.set_ylabel("Augstums")
