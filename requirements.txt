@@ -7,3 +7,4 @@ scipy
 rasterio
 matplotlib
 plotly
+scipy>=1.7.0
