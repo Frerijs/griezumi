@@ -96,7 +96,7 @@ with tempfile.TemporaryDirectory() as tmpdirname:
 
     st.header("Ielādētie Dati")
 
-    @st.cache_data
+    @st.cache_resource
     def load_shp_files(shp_directory):
         shp_files = glob.glob(os.path.join(shp_directory, '*.shp'))
         return shp_files
@@ -112,7 +112,7 @@ with tempfile.TemporaryDirectory() as tmpdirname:
 
     # === 4. Nolasa virsmas (LandXML un DEM) un izveido interpolatorus ===
 
-    @st.cache_data
+    @st.cache_resource
     def load_surfaces(surface_directory):
         surface_interpolators = {}
         surface_rasters = {}
