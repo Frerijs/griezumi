@@ -1,9 +1,9 @@
-numpy
+streamlit
 pandas
+numpy
 geopandas
 shapely
 scipy
 rasterio
 matplotlib
 plotly
-streamlit
