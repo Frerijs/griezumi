@@ -26,6 +26,7 @@ st.title("Šķērsgriezumu Profili")
 
 st.sidebar.header("Iestatījumi")
 
+# Izveidojam pagaidu mapes, lai glabātu augšupielādētos failus
 with tempfile.TemporaryDirectory() as tmpdirname:
     shp_dir = os.path.join(tmpdirname, 'linijas')
     surface_dir = os.path.join(tmpdirname, 'virsmas')
@@ -96,7 +97,7 @@ with tempfile.TemporaryDirectory() as tmpdirname:
 
     st.header("Ielādētie Dati")
 
-    @st.cache_data
+    @st.cache_data(show_spinner=False)
     def load_shp_files(shp_directory):
         shp_files = glob.glob(os.path.join(shp_directory, '*.shp'))
         return shp_files
@@ -108,11 +109,12 @@ with tempfile.TemporaryDirectory() as tmpdirname:
         for shp in shp_files:
             st.write(f"- {os.path.basename(shp)}")
     else:
+        st.warning("Mapē nav atrasti SHP faili.")
         st.stop()
 
     # === 4. Nolasa virsmas (LandXML un DEM) un izveido interpolatorus ===
 
-    @st.cache_data
+    @st.cache_resource(show_spinner=False)
     def load_surfaces(surface_directory):
         surface_interpolators = {}
         surface_rasters = {}
@@ -132,20 +134,26 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                 text = pnt_list.text.strip()
                 points = text.split()
                 for i in range(0, len(points), 3):
-                    x = float(points[i])
-                    y = float(points[i+1])
-                    z = float(points[i+2])
-                    all_coords.append([x, y, z])
+                    try:
+                        x = float(points[i])
+                        y = float(points[i+1])
+                        z = float(points[i+2])
+                        all_coords.append([x, y, z])
+                    except (IndexError, ValueError):
+                        continue
 
             p_elements = root.findall('.//{*}P')
             for p in p_elements:
                 text = p.text.strip()
                 if text:
                     points = text.split()
-                    x = float(points[0])
-                    y = float(points[1])
-                    z = float(points[2])
-                    all_coords.append([x, y, z])
+                    try:
+                        x = float(points[0])
+                        y = float(points[1])
+                        z = float(points[2])
+                        all_coords.append([x, y, z])
+                    except (IndexError, ValueError):
+                        continue
 
             if not all_coords:
                 continue
@@ -165,11 +173,19 @@ with tempfile.TemporaryDirectory() as tmpdirname:
 
         for dem_file in dem_files:
             surface_name = os.path.splitext(os.path.basename(dem_file))[0] + '_dem'
-            dem_dataset = rasterio.open(dem_file)
+            try:
+                dem_dataset = rasterio.open(dem_file)
+            except rasterio.errors.RasterioIOError:
+                st.warning(f"DEM fails {os.path.basename(dem_file)} nevar atvērt.")
+                continue
 
             if dem_dataset.crs.to_epsg() != 3059:
-                vrt_params = {'crs': 'EPSG:3059'}
-                dem_dataset = WarpedVRT(dem_dataset, **vrt_params)
+                try:
+                    vrt_params = {'crs': 'EPSG:3059'}
+                    dem_dataset = WarpedVRT(dem_dataset, **vrt_params)
+                except Exception as e:
+                    st.warning(f"Neizdevās pārvērst DEM faila {os.path.basename(dem_file)} koordinātu sistēmu: {e}")
+                    continue
 
             surface_rasters[surface_name] = dem_dataset
             surface_types[surface_name] = 'dem'
@@ -186,18 +202,26 @@ with tempfile.TemporaryDirectory() as tmpdirname:
 
     # === 5. Nolasa ortofoto ===
 
-    @st.cache_resource
+    @st.cache_resource(show_spinner=False)
     def load_ortho(ortho_directory):
         ortho_files = glob.glob(os.path.join(ortho_directory, '*.tif'))
         if not ortho_files:
             return None
 
         ortho_file = ortho_files[0]
-        ortho_dataset = rasterio.open(ortho_file)
+        try:
+            ortho_dataset = rasterio.open(ortho_file)
+        except rasterio.errors.RasterioIOError:
+            st.warning(f"Ortofoto fails {os.path.basename(ortho_file)} nevar atvērt.")
+            return None
 
         if ortho_dataset.crs.to_epsg() != 3059:
-            vrt_params = {'crs': 'EPSG:3059'}
-            ortho_dataset = WarpedVRT(ortho_dataset, **vrt_params)
+            try:
+                vrt_params = {'crs': 'EPSG:3059'}
+                ortho_dataset = WarpedVRT(ortho_dataset, **vrt_params)
+            except Exception as e:
+                st.warning(f"Neizdevās pārvērst ortofoto faila {os.path.basename(ortho_file)} koordinātu sistēmu: {e}")
+                return None
 
         return ortho_dataset
 
@@ -206,6 +230,7 @@ with tempfile.TemporaryDirectory() as tmpdirname:
     if ortho_dataset:
         st.success(f"Ortofoto ielādēts: {os.path.basename(ortho_dataset.name)}")
     else:
+        st.warning("Ortofoto faili nav ielādēti vai nevar atvērt.")
         st.stop()
 
     # === 6. Apstrādā katru SHP failu ===
@@ -300,9 +325,14 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                     if surface_type == 'landxml':
                         interpolator = surface_interpolators[surface_name]
                         x_coords_swapped, y_coords_swapped = y_coords, x_coords
-                        z_values = interpolator(x_coords_swapped.tolist(), y_coords_swapped.tolist())
+                        try:
+                            z_values = interpolator(x_coords_swapped.tolist(), y_coords_swapped.tolist())
+                        except Exception as e:
+                            st.warning(f"Neizdevās interpolēt virsmu {surface_name} līnijai {current_line_id}: {e}")
+                            continue
                         nan_indices = np.isnan(z_values)
                         if np.all(nan_indices):
+                            st.warning(f"Visi punkti līnijā {current_line_id} atrodas ārpus virsmas {surface_name}.")
                             continue
                         df[f'Elevation_{surface_name}'] = z_values
 
@@ -330,6 +360,7 @@ with tempfile.TemporaryDirectory() as tmpdirname:
 
                 elevation_columns = [col for col in df.columns if col.startswith('Elevation_')]
                 if not elevation_columns:
+                    st.warning(f"Līnija {current_line_id} nav derīgu Z vērtību. Izlaižam.")
                     continue
 
                 st.write("#### Datu Pārskats")
