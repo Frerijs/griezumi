@@ -8,8 +8,7 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 from shapely.geometry import LineString, Point, MultiLineString
-from scipy.spatial import Delaunay
-from scipy.interpolate import LinearNDInterpolator
+from scipy.interpolate import griddata
 import rasterio
 from rasterio.vrt import WarpedVRT
 import rasterio.plot
@@ -110,11 +109,11 @@ with tempfile.TemporaryDirectory() as tmpdirname:
     else:
         st.stop()
 
-    # === 4. Nolasa virsmas (LandXML un DEM) un izveido interpolatorus ===
+    # === 4. Nolasa virsmas (LandXML un DEM) ===
 
     @st.cache_data
     def load_surfaces(surface_directory):
-        surface_interpolators = {}
+        surface_points = {}
         surface_rasters = {}
         surface_types = {}
 
@@ -151,17 +150,11 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                 continue
 
             coords = np.array(all_coords)
-            coords_xy = coords[:, :2]
-            z_coords = coords[:, 2]
+            x = coords[:, 0]
+            y = coords[:, 1]
+            z = coords[:, 2]
 
-            if coords.shape[0] < 3:
-                continue
-
-            # Izveidojiet Delaunay triangulāciju
-            tri = Delaunay(coords_xy)
-            interpolator = LinearNDInterpolator(tri, z_coords)
-
-            surface_interpolators[surface_name] = interpolator
+            surface_points[surface_name] = (x, y, z)
             surface_types[surface_name] = 'landxml'
 
         for dem_file in dem_files:
@@ -175,11 +168,11 @@ with tempfile.TemporaryDirectory() as tmpdirname:
             surface_rasters[surface_name] = dem_dataset
             surface_types[surface_name] = 'dem'
 
-        return surface_interpolators, surface_rasters, surface_types
+        return surface_points, surface_rasters, surface_types
 
-    surface_interpolators, surface_rasters, surface_types = load_surfaces(surface_dir)
+    surface_points, surface_rasters, surface_types = load_surfaces(surface_dir)
 
-    if not surface_interpolators and not surface_rasters:
+    if not surface_points and not surface_rasters:
         st.error("Nav atrastas derīgas virsmas apstrādei.")
         st.stop()
     else:
@@ -299,11 +292,17 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                     surface_type = surface_types[surface_name]
 
                     if surface_type == 'landxml':
-                        interpolator = surface_interpolators[surface_name]
-                        z_values = interpolator(x_coords, y_coords)
+                        interpolator = surface_points[surface_name]
+                        x_surface, y_surface, z_surface = interpolator
+                        points_surface = np.vstack((x_surface, y_surface)).T
+                        z = z_surface
+
+                        # Izmanto griddata
+                        z_values = griddata(points_surface, z, (x_coords, y_coords), method='linear')
                         z_values = np.array(z_values)
                         nan_indices = np.isnan(z_values)
                         if np.all(nan_indices):
+                            st.warning(f"Interpolācija nevarēja atrast z vērtības virsmas {surface_name} līnijai {current_line_id}")
                             continue
                         df[f'Elevation_{surface_name}'] = z_values
 
@@ -354,7 +353,9 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                     xaxis=dict(range=[0, part.length])
                 )
 
-                fig_html = fig.to_html(full_html=False, include_plotlyjs=False, div_id=f'plot_{current_line_id}', config={'responsive': True})
+                # Pievienot pāris pārbaužu rindas
+                st.write(f"Z vērtības: {z_values}")
+                st.write(f"Dati DataFrame: {df.head()}")
 
                 map_image_base64 = generate_map_image(part, points_gdf, ortho_dataset)
 
