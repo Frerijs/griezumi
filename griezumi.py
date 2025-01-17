@@ -300,7 +300,7 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                     if surface_type == 'landxml':
                         interpolator = surface_interpolators[surface_name]
                         x_coords_swapped, y_coords_swapped = y_coords, x_coords
-                        z_values = interpolator(x_coords_swapped.tolist(), y_coords_swapped.tolist())
+                        z_values = interpolator(x_coords_swapped, y_coords_swapped)
                         nan_indices = np.isnan(z_values)
                         if np.all(nan_indices):
                             continue
@@ -308,11 +308,7 @@ with tempfile.TemporaryDirectory() as tmpdirname:
 
                     elif surface_type == 'dem':
                         dem_dataset = surface_rasters[surface_name]
-                        try:
-                            row_indices, col_indices = dem_dataset.index(x_coords.tolist(), y_coords.tolist())
-                        except Exception as e:
-                            st.error(f"Kļūda indeksēšanas procesā līnijai {current_line_id}: {e}")
-                            continue
+                        row_indices, col_indices = dem_dataset.index(x_coords, y_coords)
                         z_values = []
                         dem_data = dem_dataset.read(1)
                         nodata = dem_dataset.nodata
