@@ -3,52 +3,47 @@ import geopandas as gpd
 import xml.etree.ElementTree as ET
 import numpy as np
 import matplotlib.pyplot as plt
-from shapely.geometry import LineString, Point
+from shapely.geometry import LineString, Point, Polygon
 import tempfile
 import os
+from scipy.spatial import Delaunay
 
-# Funkcija, lai ielādētu LandXML un iegūtu triangulāciju
+# Funkcija, lai ielādētu LandXML un izveidotu triangulāciju
 
 def load_landxml(filepath):
     tree = ET.parse(filepath)
     root = tree.getroot()
-    ns = {'ns': 'http://www.landxml.org/schema/LandXML-1.0'}  # Atbalstām LandXML-1.0
+    ns = {'ns': 'http://www.landxml.org/schema/LandXML-1.0'}
     
-    points = {}
-    triangles = []
+    points = []
     
     # Meklējam punktus dažādās LandXML sadaļās
-    point_elements = root.findall(".//ns:Pnts/ns:P", ns)  # Meklē <Pnts> struktūru
+    point_elements = root.findall(".//ns:Pnts/ns:P", ns)
     if not point_elements:
-        point_list_element = root.find(".//ns:DataPoints/ns:PntList3D", ns)  # Alternatīvs meklējums
+        point_list_element = root.find(".//ns:DataPoints/ns:PntList3D", ns)
         if point_list_element is not None:
             point_list = point_list_element.text.split()
             for i in range(0, len(point_list), 3):
                 x, y, z = map(float, point_list[i:i+3])
-                points[len(points) + 1] = (x, y, z)
+                points.append((x, y, z))
     else:
         for p in point_elements:
-            pid = p.attrib['id']
             x, y, z = map(float, p.text.split())
-            points[pid] = (x, y, z)
+            points.append((x, y, z))
     
     if not points:
         st.write("⚠️ Brīdinājums: Netika atrasti punkti LandXML failā.")
-        return triangles, []
+        return None, []
     
-    st.write(f"✅ Atrasti {len(points)} punkti no LandXML!")
-    return triangles, list(points.values())
+    # Izveidojam triangulāciju no punktiem
+    xy_points = np.array([(p[0], p[1]) for p in points])
+    delaunay = Delaunay(xy_points)
+    triangles = [tuple(points[i] for i in tri) for tri in delaunay.simplices]
+    
+    st.write(f"✅ Atrasti {len(points)} punkti no LandXML, izveidoti {len(triangles)} trijstūri!")
+    return triangles, points
 
-# Funkcija, lai apmainītu X un Y koordinātes LandXML punktiem
-def swap_xy(triangles):
-    swapped_triangles = []
-    for tri in triangles:
-        swapped_triangles.append(((tri[0][1], tri[0][0], tri[0][2]),
-                                  (tri[1][1], tri[1][0], tri[1][2]),
-                                  (tri[2][1], tri[2][0], tri[2][2])))
-    return swapped_triangles
-
-# Funkcija, lai iegūtu Z vērtību jebkurā X, Y punktā
+# Funkcija, lai interpolētu Z vērtības
 def interpolate_z(triangles, x, y):
     for tri in triangles:
         (x1, y1, z1), (x2, y2, z2), (x3, y3, z3) = tri
@@ -72,7 +67,7 @@ def interpolate_z(triangles, x, y):
 def calculate_profile(triangles, line):
     profile = []
     for point in line.coords:
-        x, y = point[:2]  # Ignorēt sākotnējo Z
+        x, y = point[:2]
         z = interpolate_z(triangles, x, y)
         if z is not None:
             profile.append((x, y, z))
@@ -98,26 +93,18 @@ if landxml_files and shp_files:
     if shp_main_file:
         gdf = gpd.read_file(shp_main_file)
         landxml_surfaces = {}
-        landxml_points = {}
         
         for landxml_file in landxml_files:
             file_path = os.path.join(temp_dir, landxml_file.name)
             with open(file_path, "wb") as f:
                 f.write(landxml_file.getvalue())
             triangles, points = load_landxml(file_path)
-            triangles = swap_xy(triangles)
-            landxml_surfaces[landxml_file.name] = triangles
-            landxml_points[landxml_file.name] = points
+            if triangles:
+                landxml_surfaces[landxml_file.name] = triangles
         
         st.write("Ielādētas SHP līnijas un LandXML virsmas.")
         st.write(f"Atrastās {len(gdf)} līnijas no SHP faila.")
         st.write(f"LandXML virsmas: {[key for key in landxml_surfaces.keys()]}")
-        
-        # Pārbaude: Vai SHP līnijas satur Z vērtības?
-        if any(len(coord) == 3 for line in gdf.geometry for coord in line.coords):
-            st.write("✅ SHP fails satur Z vērtības.")
-        else:
-            st.write("⚠️ Brīdinājums: SHP failam nav Z vērtību, interpolācija var nebūt precīza.")
         
         fig, ax = plt.subplots()
         
@@ -129,7 +116,7 @@ if landxml_files and shp_files:
                     x_vals, y_vals, z_vals = zip(*profile)
                     ax.plot(x_vals, z_vals, label=f"{surface_name} - Līnija {row.name}")
                 else:
-                    st.write(f"Brīdinājums: Nav aprēķināts griezums {surface_name} - Līnija {row.name}")
+                    st.write(f"⚠️ Brīdinājums: Nav aprēķināts griezums {surface_name} - Līnija {row.name}")
         
         ax.set_xlabel("Attālums")
         ax.set_ylabel("Augstums")
