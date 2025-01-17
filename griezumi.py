@@ -2,7 +2,7 @@ import streamlit as st
 import geopandas as gpd
 import xml.etree.ElementTree as ET
 import numpy as np
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 from shapely.geometry import LineString, Point, Polygon
 import tempfile
 import os
@@ -66,11 +66,12 @@ def interpolate_z(triangles, x, y):
 # Funkcija, lai aprēķinātu griezumu līnijas punktiem
 def calculate_profile(triangles, line):
     profile = []
+    start_x = line.coords[0][0]  # Fiksējam sākuma punktu, lai X asij būtu attālums
     for point in line.coords:
         x, y = point[:2]
         z = interpolate_z(triangles, x, y)
         if z is not None:
-            profile.append((x, y, z))
+            profile.append((x - start_x, y, z))  # Konvertējam X uz attālumu no sākuma
     return profile
 
 # Streamlit UI
@@ -108,19 +109,15 @@ if landxml_files and shp_files:
         
         for _, row in gdf.iterrows():
             line = row.geometry
-            fig, ax = plt.subplots()
+            fig = go.Figure()
             
             for surface_name, triangles in landxml_surfaces.items():
                 profile = calculate_profile(triangles, line)
                 if profile:
                     x_vals, y_vals, z_vals = zip(*profile)
-                    ax.plot(x_vals, z_vals, label=f"{surface_name} - Līnija {row.name}")
+                    fig.add_trace(go.Scatter(x=x_vals, y=z_vals, mode='lines', name=f"{surface_name} - Līnija {row.name}"))
                 else:
                     st.write(f"⚠️ Brīdinājums: Nav aprēķināts griezums {surface_name} - Līnija {row.name}")
             
-            ax.set_xlabel("Attālums")
-            ax.set_ylabel("Augstums")
-            ax.set_title(f"Griezuma profils - Līnija {row.name}")
-            ax.legend()
-            
-            st.pyplot(fig)
+            fig.update_layout(title=f"Griezuma profils - Līnija {row.name}", xaxis_title="Attālums no sākuma punkta", yaxis_title="Augstums")
+            st.plotly_chart(fig)
