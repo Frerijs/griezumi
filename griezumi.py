@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import pandas as pd
 import geopandas as gpd
-from shapely.geometry import LineString, Point, Polygon, MultiLineString
+from shapely.geometry import LineString, Point, MultiLineString
 from scipy.spatial import Delaunay
 from scipy.interpolate import LinearNDInterpolator
 import rasterio
@@ -26,7 +26,6 @@ st.title("Šķērsgriezumu Profili")
 
 st.sidebar.header("Iestatījumi")
 
-# Izveidojam pagaidu mapes, lai glabātu augšupielādētos failus
 with tempfile.TemporaryDirectory() as tmpdirname:
     shp_dir = os.path.join(tmpdirname, 'linijas')
     surface_dir = os.path.join(tmpdirname, 'virsmas')
@@ -97,11 +96,9 @@ with tempfile.TemporaryDirectory() as tmpdirname:
 
     st.header("Ielādētie Dati")
 
-    @st.cache(allow_output_mutation=True)
+    @st.cache_data
     def load_shp_files(shp_directory):
         shp_files = glob.glob(os.path.join(shp_directory, '*.shp'))
-        if not shp_files:
-            st.error("Mapē nav atrasti SHP faili. Lūdzu, pārbaudiet augšupielādētos failus.")
         return shp_files
 
     shp_files = load_shp_files(shp_dir)
@@ -115,7 +112,7 @@ with tempfile.TemporaryDirectory() as tmpdirname:
 
     # === 4. Nolasa virsmas (LandXML un DEM) un izveido interpolatorus ===
 
-    @st.cache(allow_output_mutation=True)
+    @st.cache_data
     def load_surfaces(surface_directory):
         surface_interpolators = {}
         surface_rasters = {}
@@ -124,16 +121,10 @@ with tempfile.TemporaryDirectory() as tmpdirname:
         landxml_files = glob.glob(os.path.join(surface_directory, '*.xml'))
         dem_files = glob.glob(os.path.join(surface_directory, '*.tif'))
 
-        if not landxml_files and not dem_files:
-            st.error("Mapē nav atrasti LandXML vai DEM faili. Lūdzu, pārbaudiet augšupielādētos failus.")
-            return surface_interpolators, surface_rasters, surface_types
-
-        # Apstrādā LandXML virsmas
         for landxml_file in landxml_files:
             surface_name = os.path.splitext(os.path.basename(landxml_file))[0] + '_xml'
             tree = ET.parse(landxml_file)
             root = tree.getroot()
-            ns = {'landxml': 'http://www.landxml.org/schema/LandXML-1.0'}
 
             all_coords = []
             pnt_list3d = root.findall('.//{*}PntList3D')
@@ -157,7 +148,6 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                     all_coords.append([x, y, z])
 
             if not all_coords:
-                st.warning(f"Virsmā {surface_name} nav atrasti punkti.")
                 continue
 
             coords = np.array(all_coords)
@@ -165,7 +155,6 @@ with tempfile.TemporaryDirectory() as tmpdirname:
             z_coords = coords[:, 2]
 
             if coords.shape[0] < 3:
-                st.warning(f"Nepietiek punktu virsmas {surface_name} interpolācijai.")
                 continue
 
             tri = Delaunay(coords_xy)
@@ -174,7 +163,6 @@ with tempfile.TemporaryDirectory() as tmpdirname:
             surface_interpolators[surface_name] = interpolator
             surface_types[surface_name] = 'landxml'
 
-        # Apstrādā DEM virsmas
         for dem_file in dem_files:
             surface_name = os.path.splitext(os.path.basename(dem_file))[0] + '_dem'
             dem_dataset = rasterio.open(dem_file)
@@ -198,11 +186,10 @@ with tempfile.TemporaryDirectory() as tmpdirname:
 
     # === 5. Nolasa ortofoto ===
 
-    @st.cache(allow_output_mutation=True)
+    @st.cache_resource
     def load_ortho(ortho_directory):
         ortho_files = glob.glob(os.path.join(ortho_directory, '*.tif'))
         if not ortho_files:
-            st.error("Mapē nav atrasti ortofoto faili. Lūdzu, pārbaudiet augšupielādētos failus.")
             return None
 
         ortho_file = ortho_files[0]
@@ -251,7 +238,6 @@ with tempfile.TemporaryDirectory() as tmpdirname:
     st.header("Šķērsgriezumu Profili")
 
     for shp_file in shp_files:
-        st.subheader(f"Apstrādā SHP failu: {os.path.basename(shp_file)}")
         lines_gdf = gpd.read_file(shp_file)
 
         if lines_gdf.crs is None:
@@ -272,12 +258,10 @@ with tempfile.TemporaryDirectory() as tmpdirname:
             if 'id' in attribute_fields:
                 line_attribute_id = row[attribute_fields['id']]
                 if pd.isna(line_attribute_id) or str(line_attribute_id).strip() == '':
-                    st.warning(f"SHP faila {os.path.basename(shp_file)} līnijai indeksā {idx} ID lauks ir tukšs.")
                     line_attribute_id = "nav ID"
                 else:
                     line_attribute_id = str(line_attribute_id).replace(',', '').strip()
             else:
-                st.warning(f"SHP faila {os.path.basename(shp_file)} lauks 'id' vai 'ID' nav atrasts. Lieto 'nav ID'.")
                 line_attribute_id = "nav ID"
 
             if geom.geom_type == 'LineString':
@@ -319,10 +303,7 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                         z_values = interpolator(x_coords_swapped, y_coords_swapped)
                         nan_indices = np.isnan(z_values)
                         if np.all(nan_indices):
-                            st.warning(f"Visi punkti līnijā {current_line_id} atrodas ārpus virsmas {surface_name}.")
                             continue
-                        elif np.any(nan_indices):
-                            st.warning(f"Daži punkti līnijā {current_line_id} atrodas ārpus virsmas {surface_name}.")
                         df[f'Elevation_{surface_name}'] = z_values
 
                     elif surface_type == 'dem':
@@ -341,23 +322,14 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                             except IndexError:
                                 z_values.append(np.nan)
                         z_values = np.array(z_values)
-                        nan_indices = np.isnan(z_values)
-                        if np.all(nan_indices):
-                            st.warning(f"Visi punkti līnijā {current_line_id} atrodas ārpus DEM virsmas {surface_name}.")
-                            continue
-                        elif np.any(nan_indices):
-                            st.warning(f"Daži punkti līnijā {current_line_id} atrodas ārpus DEM virsmas {surface_name}.")
                         df[f'Elevation_{surface_name}'] = z_values
 
                 elevation_columns = [col for col in df.columns if col.startswith('Elevation_')]
                 if not elevation_columns:
-                    st.warning(f"Līnija {current_line_id} nav derīgu Z vērtību. Izlaižam.")
                     continue
 
                 st.write("#### Datu Pārskats")
                 st.dataframe(df.head())
-
-                # === 6.1. Izveidot grafiku ar Plotly ===
 
                 fig = go.Figure()
 
@@ -381,11 +353,9 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                     xaxis=dict(range=[0, part.length])
                 )
 
-                # === 6.2. Ģenerēt ortofoto attēlu kā Base64 ===
+                fig_html = fig.to_html(full_html=False, include_plotlyjs=False, div_id=f'plot_{current_line_id}', config={'responsive': True})
 
                 map_image_base64 = generate_map_image(part, points_gdf, ortho_dataset)
-
-                # === 6.3. Pievienot saturu HTML failam ===
 
                 if isinstance(line_attribute_id, (int, float)):
                     line_attribute_id_str = f"{line_attribute_id}"
