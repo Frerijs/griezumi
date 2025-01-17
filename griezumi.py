@@ -8,8 +8,7 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 from shapely.geometry import LineString, Point, MultiLineString
-from scipy.spatial import Delaunay
-from scipy.interpolate import LinearNDInterpolator
+from scipy.interpolate import LinearTriInterpolator
 import rasterio
 from rasterio.vrt import WarpedVRT
 import rasterio.plot
@@ -126,39 +125,47 @@ with tempfile.TemporaryDirectory() as tmpdirname:
             tree = ET.parse(landxml_file)
             root = tree.getroot()
 
-            all_coords = []
-            pnt_list3d = root.findall('.//{*}PntList3D')
-            for pnt_list in pnt_list3d:
+            # Izvelciet virsotņu koordinātas
+            coords_dict = {}
+            points = root.findall('.//{*}PntList3D')
+            point_id = 1  # Pieņemot, ka punktiem ir unikāli identifikatori
+            for pnt_list in points:
                 text = pnt_list.text.strip()
-                points = text.split()
-                for i in range(0, len(points), 3):
-                    x = float(points[i])
-                    y = float(points[i+1])
-                    z = float(points[i+2])
-                    all_coords.append([x, y, z])
+                point_values = text.split()
+                for i in range(0, len(point_values), 3):
+                    x = float(point_values[i])
+                    y = float(point_values[i+1])
+                    z = float(point_values[i+2])
+                    coords_dict[point_id] = (x, y, z)
+                    point_id += 1
 
-            p_elements = root.findall('.//{*}P')
-            for p in p_elements:
-                text = p.text.strip()
-                if text:
-                    points = text.split()
-                    x = float(points[0])
-                    y = float(points[1])
-                    z = float(points[2])
-                    all_coords.append([x, y, z])
+            # Izvelciet trijstūra definīcijas
+            triangles = []
+            for polyloop in root.findall('.//{*}PolyLoop'):
+                pts = polyloop.findall('.//{*}P')
+                if len(pts) >= 3:
+                    # Pieņemot, ka 'ref' atribūts satur punktu identifikatorus
+                    indices = [int(pt.attrib.get('ref', '').replace('#', '')) for pt in pts[:3]]
+                    triangles.append(indices)
 
-            if not all_coords:
+            if not triangles:
                 continue
 
-            coords = np.array(all_coords)
-            coords_xy = coords[:, :2]
-            z_coords = coords[:, 2]
+            # Izveidojiet trijstūru koordinātas
+            triangles_coords = []
+            for tri in triangles:
+                try:
+                    tri_coords = [coords_dict[pt_id][:2] for pt_id in tri]
+                    triangles_coords.append(tri_coords)
+                except KeyError:
+                    continue
 
-            if coords.shape[0] < 3:
-                continue
+            # Izveidojiet punktu un trijstūru masīvus
+            points_array = np.array([coords_dict[pt_id] for pt_id in sorted(coords_dict.keys())])
+            triangles_array = np.array(triangles)
 
-            tri = Delaunay(coords_xy)
-            interpolator = LinearNDInterpolator(tri, z_coords)
+            # Izveidojiet interpolatoru, izmantojot esošo triangulāciju
+            interpolator = LinearTriInterpolator(triangles_array, points_array[:, 2])
 
             surface_interpolators[surface_name] = interpolator
             surface_types[surface_name] = 'landxml'
@@ -299,8 +306,9 @@ with tempfile.TemporaryDirectory() as tmpdirname:
 
                     if surface_type == 'landxml':
                         interpolator = surface_interpolators[surface_name]
-                        x_coords_swapped, y_coords_swapped = y_coords, x_coords
-                        z_values = interpolator(x_coords_swapped, y_coords_swapped)
+                        # Pārliecinieties, ka interpolator tiek izmantots pareizi
+                        z_values = interpolator(x_coords, y_coords)
+                        z_values = np.array(z_values)
                         nan_indices = np.isnan(z_values)
                         if np.all(nan_indices):
                             continue
