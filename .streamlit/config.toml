@@ -1,0 +1,3 @@
+[server]
+# Maksimālais augšupielādes izmērs (MB)
+maxUploadSize = 5000
