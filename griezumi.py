@@ -3,7 +3,7 @@ import geopandas as gpd
 import xml.etree.ElementTree as ET
 import numpy as np
 import plotly.graph_objects as go
-from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry import LineString, Point
 import tempfile
 import os
 from scipy.spatial import Delaunay
@@ -63,15 +63,18 @@ def interpolate_z(triangles, x, y):
             continue
     return None
 
-# Funkcija, lai aprēķinātu griezumu līnijas punktiem
-def calculate_profile(triangles, line):
+# Funkcija, lai ģenerētu interpolācijas punktus un aprēķinātu griezuma profilu
+def calculate_profile(triangles, line, num_points=100):
     profile = []
-    start_x = line.coords[0][0]  # Fiksējam sākuma punktu, lai X asij būtu attālums
-    for point in line.coords:
-        x, y = point[:2]
+    line_length = line.length
+    distances = np.linspace(0, line_length, num_points)
+    points = [line.interpolate(d) for d in distances]
+    
+    for d, point in zip(distances, points):
+        x, y = point.x, point.y
         z = interpolate_z(triangles, x, y)
         if z is not None:
-            profile.append((x - start_x, y, z))  # Konvertējam X uz attālumu no sākuma
+            profile.append((d, z))  # X ir attālums gar līniju
     return profile
 
 # Streamlit UI
@@ -114,10 +117,10 @@ if landxml_files and shp_files:
             for surface_name, triangles in landxml_surfaces.items():
                 profile = calculate_profile(triangles, line)
                 if profile:
-                    x_vals, y_vals, z_vals = zip(*profile)
+                    x_vals, z_vals = zip(*profile)
                     fig.add_trace(go.Scatter(x=x_vals, y=z_vals, mode='lines', name=f"{surface_name} - Līnija {row.name}"))
                 else:
                     st.write(f"⚠️ Brīdinājums: Nav aprēķināts griezums {surface_name} - Līnija {row.name}")
             
-            fig.update_layout(title=f"Griezuma profils - Līnija {row.name}", xaxis_title="Attālums no sākuma punkta", yaxis_title="Augstums")
+            fig.update_layout(title=f"Griezuma profils - Līnija {row.name}", xaxis_title="Attālums gar līniju", yaxis_title="Augstums")
             st.plotly_chart(fig)
