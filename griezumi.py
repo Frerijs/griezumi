@@ -9,7 +9,7 @@ import pandas as pd
 import geopandas as gpd
 from shapely.geometry import LineString, Point, MultiLineString
 from scipy.spatial import Delaunay
-from scipy.interpolate import LinearNDInterpolator
+from scipy.interpolate import LinearNDInterpolator, griddata
 import rasterio
 from rasterio.vrt import WarpedVRT
 import rasterio.plot
@@ -142,10 +142,11 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                 text = p.text.strip()
                 if text:
                     points = text.split()
-                    x = float(points[0])
-                    y = float(points[1])
-                    z = float(points[2])
-                    all_coords.append([x, y, z])
+                    if len(points) >= 3:
+                        x = float(points[0])
+                        y = float(points[1])
+                        z = float(points[2])
+                        all_coords.append([x, y, z])
 
             if not all_coords:
                 continue
@@ -242,7 +243,12 @@ with tempfile.TemporaryDirectory() as tmpdirname:
         plt.close(fig)
         buf.seek(0)
         image_base64 = base64.b64encode(buf.read()).decode('utf-8')
-        return image_base64
+        return image_base64, total_bounds
+
+    # Funkcija, lai pārbaudītu, vai punkti atrodas triangulācijas ietvaros
+    def points_within_bounds(x, y, total_bounds):
+        x_min, y_min, x_max, y_max = total_bounds
+        return (x >= x_min) & (x <= x_max) & (y >= y_min) & (y <= y_max)
 
     st.header("Šķērsgriezumu Profili")
 
@@ -303,6 +309,16 @@ with tempfile.TemporaryDirectory() as tmpdirname:
 
                 df = pd.DataFrame({'Distance': distances})
 
+                # Izveidojiet karti un iegūstiet robežas
+                map_image_base64, total_bounds = generate_map_image(part, points_gdf, ortho_dataset)
+
+                # Pārbaudiet, vai punkti atrodas triangulācijas ietvaros
+                within_bounds = points_within_bounds(x_coords, y_coords, total_bounds)
+
+                if not np.any(within_bounds):
+                    st.warning(f"Līnijas {current_line_id} punkti nav triangulācijas ietvarā.")
+                    continue
+
                 for surface_name in surface_types.keys():
                     surface_type = surface_types[surface_name]
 
@@ -310,10 +326,20 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                         interpolator = surface_interpolators[surface_name]
                         z_values = interpolator(x_coords, y_coords)
                         z_values = np.array(z_values)
-                        
+
                         # Diagnostikas ziņojumi
                         st.write(f"Z vērtības priekš {surface_name}: {z_values}")
-                        st.write(f"Dati DataFrame: {df.head()}")
+
+                        # Ja visi z_values ir NaN, izmantojam 'nearest' metodi
+                        if np.all(np.isnan(z_values)):
+                            st.write(f"Visas z vērtības ir NaN priekš {surface_name}, mēģinot 'nearest' interpolāciju.")
+                            z_values = griddata(
+                                (interpolator.x, interpolator.y),
+                                interpolator.z,
+                                (x_coords, y_coords),
+                                method='nearest'
+                            )
+                            st.write(f"Z vērtības pēc 'nearest' interpolācijas priekš {surface_name}: {z_values}")
 
                         nan_indices = np.isnan(z_values)
                         if np.all(nan_indices):
@@ -372,15 +398,8 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                 st.write(f"Z vērtības: {z_values}")
                 st.write(f"Dati DataFrame: {df.head()}")
 
-                map_image_base64 = generate_map_image(part, points_gdf, ortho_dataset)
-
-                if isinstance(line_attribute_id, (int, float)):
-                    line_attribute_id_str = f"{line_attribute_id}"
-                else:
-                    line_attribute_id_str = str(line_attribute_id).replace(',', '').strip()
-
-                st.markdown(f"### Griezums: {line_attribute_id_str}")
-                st.image(f'data:image/png;base64,{map_image_base64}', use_container_width=True, caption=f'Karte griezumam {line_attribute_id_str}')
+                st.markdown(f"### Griezums: {line_attribute_id}")
+                st.image(f'data:image/png;base64,{map_image_base64}', use_container_width=True, caption=f'Karte griezumam {line_attribute_id}')
                 st.plotly_chart(fig, use_container_width=True)
 
     st.success("Apstrāde pabeigta!")
