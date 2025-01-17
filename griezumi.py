@@ -106,10 +106,10 @@ if landxml_files and shp_files:
         st.write(f"Atrastās {len(gdf)} līnijas no SHP faila.")
         st.write(f"LandXML virsmas: {[key for key in landxml_surfaces.keys()]}")
         
-        fig, ax = plt.subplots()
-        
         for _, row in gdf.iterrows():
             line = row.geometry
+            fig, ax = plt.subplots()
+            
             for surface_name, triangles in landxml_surfaces.items():
                 profile = calculate_profile(triangles, line)
                 if profile:
@@ -117,10 +117,10 @@ if landxml_files and shp_files:
                     ax.plot(x_vals, z_vals, label=f"{surface_name} - Līnija {row.name}")
                 else:
                     st.write(f"⚠️ Brīdinājums: Nav aprēķināts griezums {surface_name} - Līnija {row.name}")
-        
-        ax.set_xlabel("Attālums")
-        ax.set_ylabel("Augstums")
-        ax.set_title("Griezumu profili")
-        ax.legend()
-        
-        st.pyplot(fig)
+            
+            ax.set_xlabel("Attālums")
+            ax.set_ylabel("Augstums")
+            ax.set_title(f"Griezuma profils - Līnija {row.name}")
+            ax.legend()
+            
+            st.pyplot(fig)
