@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 from shapely.geometry import LineString, Point, MultiLineString
-from scipy.interpolate import griddata
+from scipy.spatial import Delaunay
+from scipy.interpolate import LinearNDInterpolator
 import rasterio
 from rasterio.vrt import WarpedVRT
 import rasterio.plot
@@ -113,7 +114,7 @@ with tempfile.TemporaryDirectory() as tmpdirname:
 
     @st.cache_data
     def load_surfaces(surface_directory):
-        surface_points = {}
+        surface_interpolators = {}
         surface_rasters = {}
         surface_types = {}
 
@@ -150,12 +151,23 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                 continue
 
             coords = np.array(all_coords)
-            x = coords[:, 0]
-            y = coords[:, 1]
-            z = coords[:, 2]
+            coords_xy = coords[:, :2]
+            z_coords = coords[:, 2]
 
-            surface_points[surface_name] = (x, y, z)
+            if coords.shape[0] < 3:
+                continue
+
+            # Izveidojiet Delaunay triangulāciju
+            tri = Delaunay(coords_xy)
+            interpolator = LinearNDInterpolator(tri, z_coords)
+
+            surface_interpolators[surface_name] = interpolator
             surface_types[surface_name] = 'landxml'
+
+            # Diagnostikas ziņojumi
+            st.write(f"Loaded LandXML surface: {surface_name}")
+            st.write(f"Number of points: {len(coords)}")
+            st.write(f"Delaunay triangulation created with {len(tri.simplices)} triangles.")
 
         for dem_file in dem_files:
             surface_name = os.path.splitext(os.path.basename(dem_file))[0] + '_dem'
@@ -168,11 +180,14 @@ with tempfile.TemporaryDirectory() as tmpdirname:
             surface_rasters[surface_name] = dem_dataset
             surface_types[surface_name] = 'dem'
 
-        return surface_points, surface_rasters, surface_types
+        return surface_interpolators, surface_rasters, surface_types
 
-    surface_points, surface_rasters, surface_types = load_surfaces(surface_dir)
+    surface_interpolators, surface_rasters, surface_types = load_surfaces(surface_dir)
 
-    if not surface_points and not surface_rasters:
+    st.write(f"Surface interpolators: {list(surface_interpolators.keys())}")
+    st.write(f"Surface types: {surface_types}")
+
+    if not surface_interpolators and not surface_rasters:
         st.error("Nav atrastas derīgas virsmas apstrādei.")
         st.stop()
     else:
@@ -292,14 +307,14 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                     surface_type = surface_types[surface_name]
 
                     if surface_type == 'landxml':
-                        interpolator = surface_points[surface_name]
-                        x_surface, y_surface, z_surface = interpolator
-                        points_surface = np.vstack((x_surface, y_surface)).T
-                        z = z_surface
-
-                        # Izmanto griddata
-                        z_values = griddata(points_surface, z, (x_coords, y_coords), method='linear')
+                        interpolator = surface_interpolators[surface_name]
+                        z_values = interpolator(x_coords, y_coords)
                         z_values = np.array(z_values)
+                        
+                        # Diagnostikas ziņojumi
+                        st.write(f"Z vērtības priekš {surface_name}: {z_values}")
+                        st.write(f"Dati DataFrame: {df.head()}")
+
                         nan_indices = np.isnan(z_values)
                         if np.all(nan_indices):
                             st.warning(f"Interpolācija nevarēja atrast z vērtības virsmas {surface_name} līnijai {current_line_id}")
