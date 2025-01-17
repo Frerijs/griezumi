@@ -26,7 +26,7 @@ def load_landxml(filepath):
         if p1 in points and p2 in points and p3 in points:
             triangles.append((points[p1], points[p2], points[p3]))
     
-    return triangles
+    return triangles, list(points.values())
 
 # Funkcija, lai apmainītu X un Y koordinātes LandXML punktiem
 def swap_xy(triangles):
@@ -87,18 +87,29 @@ if landxml_files and shp_files:
     if shp_main_file:
         gdf = gpd.read_file(shp_main_file)
         landxml_surfaces = {}
+        landxml_points = {}
         
         for landxml_file in landxml_files:
             file_path = os.path.join(temp_dir, landxml_file.name)
             with open(file_path, "wb") as f:
                 f.write(landxml_file.getvalue())
-            triangles = load_landxml(file_path)
+            triangles, points = load_landxml(file_path)
             triangles = swap_xy(triangles)
             landxml_surfaces[landxml_file.name] = triangles
+            landxml_points[landxml_file.name] = points
         
         st.write("Ielādētas SHP līnijas un LandXML virsmas.")
-        st.write(f"Atrastas {len(gdf)} līnijas no SHP faila.")
+        st.write(f"Atrastās {len(gdf)} līnijas no SHP faila.")
         st.write(f"LandXML virsmas: {[key for key in landxml_surfaces.keys()]}")
+        
+        # Diagnostikas izvade
+        st.write("### Diagnostikas dati")
+        for name, points in landxml_points.items():
+            st.write(f"{name} pirmie 5 punkti: {points[:5]}")
+        
+        for i, row in gdf.iterrows():
+            line = row.geometry
+            st.write(f"Līnija {i} pirmie 5 punkti: {list(line.coords)[:5]}")
         
         fig, ax = plt.subplots()
         
