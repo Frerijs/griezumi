@@ -243,7 +243,9 @@ with tempfile.TemporaryDirectory() as tmpdirname:
         if lines_gdf.crs is None:
             st.warning(f"SHP failam {os.path.basename(shp_file)} nav norādīta koordinātu sistēma.")
         else:
-            st.write(f"SHP faila koordinātu sistēma: {lines_gdf.crs}")
+            # Šī rinda ir noņemta, lai neatspoguļotu koordinātu sistēmu
+            # st.write(f"SHP faila koordinātu sistēma: {lines_gdf.crs}")
+            pass
 
         if lines_gdf.crs and lines_gdf.crs.to_epsg() != 3059:
             lines_gdf = lines_gdf.to_crs(epsg=3059)
@@ -279,9 +281,10 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                 else:
                     current_line_id = f"{os.path.splitext(os.path.basename(shp_file))[0]}_{line_attribute_id}_part{part_idx}"
 
-                st.write(f"### Līnijas {current_line_id}")
-                st.write(f"X koordinātu diapazons: {part.bounds[0]} - {part.bounds[2]}")
-                st.write(f"Y koordinātu diapazons: {part.bounds[1]} - {part.bounds[3]}")
+                # Šīs rindas ir noņemtas, lai neatspoguļotu Līnijas ID un koordinātu diapazonus
+                # st.write(f"### Līnijas {current_line_id}")
+                # st.write(f"X koordinātu diapazons: {part.bounds[0]} - {part.bounds[2]}")
+                # st.write(f"Y koordinātu diapazons: {part.bounds[1]} - {part.bounds[3]}")
 
                 num_points = st.sidebar.number_input(f"Punktu skaits līnijā {current_line_id}", min_value=100, max_value=1000, value=500, key=current_line_id)
                 distances = np.linspace(0, part.length, num_points)
@@ -328,8 +331,9 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                 if not elevation_columns:
                     continue
 
-                st.write("#### Datu Pārskats")
-                st.dataframe(df.head())
+                # Šīs rindas ir noņemtas, lai neatspoguļotu Datu Pārskatu tabulu
+                # st.write("#### Datu Pārskats")
+                # st.dataframe(df.head())
 
                 fig = go.Figure()
 
