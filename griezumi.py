@@ -130,7 +130,7 @@ with tempfile.TemporaryDirectory() as tmpdirname:
 
     # === 4. Nolasa virsmas (LandXML un GeoTIFF) un izveido interpolatorus ===
 
-    @st.cache_data
+    @st.cache_resource
     def load_surfaces(surface_directory):
         surface_interpolators = {}
         surface_rasters = {}
@@ -141,50 +141,63 @@ with tempfile.TemporaryDirectory() as tmpdirname:
 
         for landxml_file in landxml_files:
             surface_name = os.path.splitext(os.path.basename(landxml_file))[0] + '_xml'
-            tree = ET.parse(landxml_file)
-            root = tree.getroot()
+            try:
+                tree = ET.parse(landxml_file)
+                root = tree.getroot()
 
-            all_coords = []
-            pnt_list3d = root.findall('.//{*}PntList3D')
-            for pnt_list in pnt_list3d:
-                text = pnt_list.text.strip()
-                points = text.split()
-                for i in range(0, len(points), 3):
-                    x = float(points[i])
-                    y = float(points[i+1])
-                    z = float(points[i+2])
-                    all_coords.append([x, y, z])
-
-            p_elements = root.findall('.//{*}P')
-            for p in p_elements:
-                text = p.text.strip()
-                if text:
+                all_coords = []
+                pnt_list3d = root.findall('.//{*}PntList3D')
+                for pnt_list in pnt_list3d:
+                    text = pnt_list.text.strip()
                     points = text.split()
-                    x = float(points[0])
-                    y = float(points[1])
-                    z = float(points[2])
-                    all_coords.append([x, y, z])
+                    for i in range(0, len(points), 3):
+                        x = float(points[i])
+                        y = float(points[i+1])
+                        z = float(points[i+2])
+                        all_coords.append([x, y, z])
 
-            if not all_coords:
+                p_elements = root.findall('.//{*}P')
+                for p in p_elements:
+                    text = p.text.strip()
+                    if text:
+                        points = text.split()
+                        x = float(points[0])
+                        y = float(points[1])
+                        z = float(points[2])
+                        all_coords.append([x, y, z])
+
+                if not all_coords:
+                    st.warning(f"Nav atrasti koordinātu dati failā {landxml_file}.")
+                    continue
+
+                coords = np.array(all_coords)
+                coords_xy = coords[:, :2]
+                z_coords = coords[:, 2]
+
+                if coords.shape[0] < 3:
+                    st.warning(f"Failā {landxml_file} ir pārāk maz koordinātu punktu.")
+                    continue
+
+                tri = Delaunay(coords_xy)
+                interpolator = LinearNDInterpolator(tri, z_coords)
+
+                surface_interpolators[surface_name] = interpolator
+                surface_types[surface_name] = 'landxml'
+            except Exception as e:
+                st.warning(f"Kļūda apstrādājot LandXML failu {landxml_file}: {e}")
                 continue
-
-            coords = np.array(all_coords)
-            coords_xy = coords[:, :2]
-            z_coords = coords[:, 2]
-
-            if coords.shape[0] < 3:
-                continue
-
-            tri = Delaunay(coords_xy)
-            interpolator = LinearNDInterpolator(tri, z_coords)
-
-            surface_interpolators[surface_name] = interpolator
-            surface_types[surface_name] = 'landxml'
 
         # Apstrādā GeoTIFF virsmas failus
         geotiff_files = glob.glob(os.path.join(surface_directory, '*.tif'))
 
         for geotiff_file in geotiff_files:
+            # Izslēdz Ortofoto mapē atrastos GeoTIFF failus, ja nepieciešams
+            # Ja GeoTIFF virsmas faili tiek glabāti citā mapē, pārliecinies, ka tie netiek iekļauti šeit
+            # Piemēram, ja Ortofoto tiek glabāts citā mapē, tad izvairies no tā
+            # Šajā piemērā pieņem, ka Ortofoto faili tiek glabāti atsevišķi
+            if geotiff_file.startswith(ortho_dir):
+                continue
+
             surface_name = os.path.splitext(os.path.basename(geotiff_file))[0] + '_geotiff'
             try:
                 raster = rasterio.open(geotiff_file)
@@ -326,7 +339,7 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                 points = [part.interpolate(distance) for distance in distances]
 
                 x_coords = np.array([point.x for point in points])
-                y_coords = np.array([point.y for point in points])
+                y_coords = np.array([point.y for point in points])  # LABOJUMS: Noņemts izsaukums points()
 
                 points_gdf = gpd.GeoDataFrame({'geometry': points}, crs='EPSG:3059')
 
@@ -337,7 +350,11 @@ with tempfile.TemporaryDirectory() as tmpdirname:
 
                     if surface_type == 'landxml':
                         interpolator = surface_interpolators[surface_name]
-                        z_values = interpolator(x_coords, y_coords)
+                        try:
+                            z_values = interpolator(x_coords, y_coords)
+                        except Exception as e:
+                            st.warning(f"Kļūda interpolācijas laikā virsmā {surface_name}: {e}")
+                            continue
                         nan_indices = np.isnan(z_values)
                         if np.all(nan_indices):
                             continue
