@@ -55,36 +55,23 @@ with tempfile.TemporaryDirectory() as tmpdirname:
     else:
         st.sidebar.info("Lūdzu, augšupielādējiet Linijas ZIP arhīvu.")
 
-    # 2.2. Augšupielādēt Virsmas (LandXML un DEM)
-    st.sidebar.subheader("Virsmas (LandXML un DEM)")
+    # 2.2. Augšupielādēt Virsmas (LandXML)
+    st.sidebar.subheader("Virsmas (LandXML)")
     uploaded_landxml = st.sidebar.file_uploader("Augšupielādēt LandXML faili (.xml)", type=["xml"], accept_multiple_files=True, key="landxml")
-    uploaded_dem = st.sidebar.file_uploader("Augšupielādēt DEM faili (.tif)", type=["tif"], accept_multiple_files=True, key="dem")
 
     if uploaded_landxml:
         for file in uploaded_landxml:
             with open(os.path.join(surface_dir, file.name), 'wb') as f:
                 f.write(file.getbuffer())
         st.sidebar.success("LandXML faili augšupielādēti veiksmīgi!")
-
-    if uploaded_dem:
-        for file in uploaded_dem:
-            with open(os.path.join(surface_dir, file.name), 'wb') as f:
-                f.write(file.getbuffer())
-        st.sidebar.success("DEM faili augšupielādēti veiksmīgi!")
-
-    if not (uploaded_landxml or uploaded_dem):
+    else:
         st.sidebar.info("Lūdzu, augšupielādējiet Virsmas failus.")
 
-    # 2.3. Augšupielādēt Ortofoto (GeoTIFF vai ZIP)
+    # 2.3. Augšupielādēt Ortofoto faili (.tif)
     st.sidebar.subheader("Ortofoto")
-    uploaded_ortho_zip = st.sidebar.file_uploader("Augšupielādēt Ortofoto ZIP (satur .tif)", type=["zip"], key="ortho_zip")
     uploaded_ortho = st.sidebar.file_uploader("Augšupielādēt Ortofoto faili (.tif)", type=["tif"], accept_multiple_files=True, key="ortho_files")
 
-    if uploaded_ortho_zip is not None:
-        with zipfile.ZipFile(uploaded_ortho_zip) as z:
-            z.extractall(ortho_dir)
-        st.sidebar.success("Ortofoto faili augšupielādēti un izvilkti veiksmīgi!")
-    elif uploaded_ortho:
+    if uploaded_ortho:
         for file in uploaded_ortho:
             with open(os.path.join(ortho_dir, file.name), 'wb') as f:
                 f.write(file.getbuffer())
@@ -110,7 +97,7 @@ with tempfile.TemporaryDirectory() as tmpdirname:
     else:
         st.stop()
 
-    # === 4. Nolasa virsmas (LandXML un DEM) un izveido interpolatorus ===
+    # === 4. Nolasa virsmas (LandXML) un izveido interpolatorus ===
 
     @st.cache_data
     def load_surfaces(surface_directory):
@@ -119,7 +106,6 @@ with tempfile.TemporaryDirectory() as tmpdirname:
         surface_types = {}
 
         landxml_files = glob.glob(os.path.join(surface_directory, '*.xml'))
-        dem_files = glob.glob(os.path.join(surface_directory, '*.tif'))
 
         for landxml_file in landxml_files:
             surface_name = os.path.splitext(os.path.basename(landxml_file))[0] + '_xml'
@@ -162,17 +148,6 @@ with tempfile.TemporaryDirectory() as tmpdirname:
 
             surface_interpolators[surface_name] = interpolator
             surface_types[surface_name] = 'landxml'
-
-        for dem_file in dem_files:
-            surface_name = os.path.splitext(os.path.basename(dem_file))[0] + '_dem'
-            dem_dataset = rasterio.open(dem_file)
-
-            if dem_dataset.crs.to_epsg() != 3059:
-                vrt_params = {'crs': 'EPSG:3059'}
-                dem_dataset = WarpedVRT(dem_dataset, **vrt_params)
-
-            surface_rasters[surface_name] = dem_dataset
-            surface_types[surface_name] = 'dem'
 
         return surface_interpolators, surface_rasters, surface_types
 
@@ -291,7 +266,7 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                 points = [part.interpolate(distance) for distance in distances]
 
                 x_coords = np.array([point.x for point in points])
-                y_coords = np.array([point.y for point in points])
+                y_coords = np.array([point.y for point in points()])
 
                 points_gdf = gpd.GeoDataFrame({'geometry': points}, crs='EPSG:3059')
 
@@ -307,24 +282,6 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                         nan_indices = np.isnan(z_values)
                         if np.all(nan_indices):
                             continue
-                        df[f'Elevation_{surface_name}'] = z_values
-
-                    elif surface_type == 'dem':
-                        dem_dataset = surface_rasters[surface_name]
-                        row_indices, col_indices = dem_dataset.index(x_coords, y_coords)
-                        z_values = []
-                        dem_data = dem_dataset.read(1)
-                        nodata = dem_dataset.nodata
-                        for row_idx, col_idx in zip(row_indices, col_indices):
-                            try:
-                                value = dem_data[row_idx, col_idx]
-                                if value == nodata:
-                                    z_values.append(np.nan)
-                                else:
-                                    z_values.append(value)
-                            except IndexError:
-                                z_values.append(np.nan)
-                        z_values = np.array(z_values)
                         df[f'Elevation_{surface_name}'] = z_values
 
                 elevation_columns = [col for col in df.columns if col.startswith('Elevation_')]
