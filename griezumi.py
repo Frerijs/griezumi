@@ -266,7 +266,7 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                 points = [part.interpolate(distance) for distance in distances]
 
                 x_coords = np.array([point.x for point in points])
-                y_coords = np.array([point.y for point in points()])
+                y_coords = np.array([point.y for point in points])  # LABOJUMS: Noņemts izsaukums points()
 
                 points_gdf = gpd.GeoDataFrame({'geometry': points}, crs='EPSG:3059')
 
