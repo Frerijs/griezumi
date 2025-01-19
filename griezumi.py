@@ -38,7 +38,7 @@ with tempfile.TemporaryDirectory() as tmpdirname:
     os.makedirs(output_dir, exist_ok=True)
 
     st.write("## Repozitorija Informācija")
-    st.write("Šī lietotne analizē SHP failus, virsmas (LandXML un DEM) un ortofoto datus, lai ģenerētu šķērsgriezumu profilus.")
+    st.write("Šī lietotne analizē SHP failus, virsmas (LandXML un GeoTIFF) un ortofoto datus, lai ģenerētu šķērsgriezumu profilus.")
 
     # === 2. Datu Augšupielāde ===
 
@@ -46,7 +46,11 @@ with tempfile.TemporaryDirectory() as tmpdirname:
 
     # 2.1. Augšupielādēt Linijas (SHP) ZIP arhīvu
     st.sidebar.subheader("Linijas (SHP)")
-    uploaded_shp_zip = st.sidebar.file_uploader("Augšupielādēt Linijas ZIP (satur .shp, .shx, .dbf, utt.)", type=["zip"], key="shp_zip")
+    uploaded_shp_zip = st.sidebar.file_uploader(
+        "Augšupielādēt Linijas ZIP (satur .shp, .shx, .dbf, utt.)",
+        type=["zip"],
+        key="shp_zip"
+    )
 
     if uploaded_shp_zip is not None:
         with zipfile.ZipFile(uploaded_shp_zip) as z:
@@ -57,7 +61,12 @@ with tempfile.TemporaryDirectory() as tmpdirname:
 
     # 2.2. Augšupielādēt Virsmas (LandXML)
     st.sidebar.subheader("Virsmas (LandXML)")
-    uploaded_landxml = st.sidebar.file_uploader("Augšupielādēt LandXML faili (.xml)", type=["xml"], accept_multiple_files=True, key="landxml")
+    uploaded_landxml = st.sidebar.file_uploader(
+        "Augšupielādēt LandXML faili (.xml)",
+        type=["xml"],
+        accept_multiple_files=True,
+        key="landxml"
+    )
 
     if uploaded_landxml:
         for file in uploaded_landxml:
@@ -65,11 +74,33 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                 f.write(file.getbuffer())
         st.sidebar.success("LandXML faili augšupielādēti veiksmīgi!")
     else:
-        st.sidebar.info("Lūdzu, augšupielādējiet Virsmas failus.")
+        st.sidebar.info("Lūdzu, augšupielādējiet LandXML failus.")
 
-    # 2.3. Augšupielādēt Ortofoto faili (.tif)
+    # 2.3. Augšupielādēt GeoTIFF Virsmas faili (.tif)
+    st.sidebar.subheader("Virsmas (GeoTIFF)")
+    uploaded_geotiff = st.sidebar.file_uploader(
+        "Augšupielādēt GeoTIFF Virsmas faili (.tif)",
+        type=["tif"],
+        accept_multiple_files=True,
+        key="geotiff_files"
+    )
+
+    if uploaded_geotiff:
+        for file in uploaded_geotiff:
+            with open(os.path.join(surface_dir, file.name), 'wb') as f:
+                f.write(file.getbuffer())
+        st.sidebar.success("GeoTIFF Virsmas faili augšupielādēti veiksmīgi!")
+    else:
+        st.sidebar.info("Lūdzu, augšupielādējiet GeoTIFF Virsmas failus.")
+
+    # 2.4. Augšupielādēt Ortofoto faili (.tif)
     st.sidebar.subheader("Ortofoto")
-    uploaded_ortho = st.sidebar.file_uploader("Augšupielādēt Ortofoto faili (.tif)", type=["tif"], accept_multiple_files=True, key="ortho_files")
+    uploaded_ortho = st.sidebar.file_uploader(
+        "Augšupielādēt Ortofoto faili (.tif)",
+        type=["tif"],
+        accept_multiple_files=True,
+        key="ortho_files"
+    )
 
     if uploaded_ortho:
         for file in uploaded_ortho:
@@ -97,7 +128,7 @@ with tempfile.TemporaryDirectory() as tmpdirname:
     else:
         st.stop()
 
-    # === 4. Nolasa virsmas (LandXML) un izveido interpolatorus ===
+    # === 4. Nolasa virsmas (LandXML un GeoTIFF) un izveido interpolatorus ===
 
     @st.cache_data
     def load_surfaces(surface_directory):
@@ -105,6 +136,7 @@ with tempfile.TemporaryDirectory() as tmpdirname:
         surface_rasters = {}
         surface_types = {}
 
+        # Apstrādā LandXML failus
         landxml_files = glob.glob(os.path.join(surface_directory, '*.xml'))
 
         for landxml_file in landxml_files:
@@ -149,6 +181,24 @@ with tempfile.TemporaryDirectory() as tmpdirname:
             surface_interpolators[surface_name] = interpolator
             surface_types[surface_name] = 'landxml'
 
+        # Apstrādā GeoTIFF virsmas failus
+        geotiff_files = glob.glob(os.path.join(surface_directory, '*.tif'))
+
+        for geotiff_file in geotiff_files:
+            surface_name = os.path.splitext(os.path.basename(geotiff_file))[0] + '_geotiff'
+            try:
+                raster = rasterio.open(geotiff_file)
+
+                if raster.crs.to_epsg() != 3059:
+                    vrt_params = {'crs': 'EPSG:3059'}
+                    raster = WarpedVRT(raster, **vrt_params)
+
+                surface_rasters[surface_name] = raster
+                surface_types[surface_name] = 'geotiff'
+            except Exception as e:
+                st.warning(f"Kļūda atverot GeoTIFF failu {geotiff_file}: {e}")
+                continue
+
         return surface_interpolators, surface_rasters, surface_types
 
     surface_interpolators, surface_rasters, surface_types = load_surfaces(surface_dir)
@@ -168,13 +218,17 @@ with tempfile.TemporaryDirectory() as tmpdirname:
             return None
 
         ortho_file = ortho_files[0]
-        ortho_dataset = rasterio.open(ortho_file)
+        try:
+            ortho_dataset = rasterio.open(ortho_file)
 
-        if ortho_dataset.crs.to_epsg() != 3059:
-            vrt_params = {'crs': 'EPSG:3059'}
-            ortho_dataset = WarpedVRT(ortho_dataset, **vrt_params)
+            if ortho_dataset.crs.to_epsg() != 3059:
+                vrt_params = {'crs': 'EPSG:3059'}
+                ortho_dataset = WarpedVRT(ortho_dataset, **vrt_params)
 
-        return ortho_dataset
+            return ortho_dataset
+        except Exception as e:
+            st.error(f"Kļūda atverot Ortofoto failu {ortho_file}: {e}")
+            return None
 
     ortho_dataset = load_ortho(ortho_dir)
 
@@ -261,12 +315,18 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                 # st.write(f"X koordinātu diapazons: {part.bounds[0]} - {part.bounds[2]}")
                 # st.write(f"Y koordinātu diapazons: {part.bounds[1]} - {part.bounds[3]}")
 
-                num_points = st.sidebar.number_input(f"Punktu skaits līnijā {current_line_id}", min_value=100, max_value=1000, value=500, key=current_line_id)
+                num_points = st.sidebar.number_input(
+                    f"Punktu skaits līnijā {current_line_id}",
+                    min_value=100,
+                    max_value=1000,
+                    value=500,
+                    key=current_line_id
+                )
                 distances = np.linspace(0, part.length, num_points)
                 points = [part.interpolate(distance) for distance in distances]
 
                 x_coords = np.array([point.x for point in points])
-                y_coords = np.array([point.y for point in points])  # LABOJUMS: Noņemts izsaukums points()
+                y_coords = np.array([point.y for point in points])
 
                 points_gdf = gpd.GeoDataFrame({'geometry': points}, crs='EPSG:3059')
 
@@ -277,11 +337,26 @@ with tempfile.TemporaryDirectory() as tmpdirname:
 
                     if surface_type == 'landxml':
                         interpolator = surface_interpolators[surface_name]
-                        x_coords_swapped, y_coords_swapped = y_coords, x_coords
-                        z_values = interpolator(x_coords_swapped, y_coords_swapped)
+                        z_values = interpolator(x_coords, y_coords)
                         nan_indices = np.isnan(z_values)
                         if np.all(nan_indices):
                             continue
+                        df[f'Elevation_{surface_name}'] = z_values
+
+                    elif surface_type == 'geotiff':
+                        raster = surface_rasters[surface_name]
+                        z_values = []
+                        for x, y in zip(x_coords, y_coords):
+                            try:
+                                row_idx, col_idx = raster.index(x, y)
+                                value = raster.read(1)[row_idx, col_idx]
+                                if value == raster.nodata:
+                                    z_values.append(np.nan)
+                                else:
+                                    z_values.append(value)
+                            except Exception:
+                                z_values.append(np.nan)
+                        z_values = np.array(z_values)
                         df[f'Elevation_{surface_name}'] = z_values
 
                 elevation_columns = [col for col in df.columns if col.startswith('Elevation_')]
@@ -314,7 +389,12 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                     xaxis=dict(range=[0, part.length])
                 )
 
-                fig_html = fig.to_html(full_html=False, include_plotlyjs=False, div_id=f'plot_{current_line_id}', config={'responsive': True})
+                fig_html = fig.to_html(
+                    full_html=False,
+                    include_plotlyjs=False,
+                    div_id=f'plot_{current_line_id}',
+                    config={'responsive': True}
+                )
 
                 map_image_base64 = generate_map_image(part, points_gdf, ortho_dataset)
 
@@ -324,7 +404,11 @@ with tempfile.TemporaryDirectory() as tmpdirname:
                     line_attribute_id_str = str(line_attribute_id).replace(',', '').strip()
 
                 st.markdown(f"### Griezums: {line_attribute_id_str}")
-                st.image(f'data:image/png;base64,{map_image_base64}', use_container_width=True, caption=f'Karte griezumam {line_attribute_id_str}')
+                st.image(
+                    f'data:image/png;base64,{map_image_base64}',
+                    use_container_width=True,
+                    caption=f'Karte griezumam {line_attribute_id_str}'
+                )
                 st.plotly_chart(fig, use_container_width=True)
 
     st.success("Apstrāde pabeigta!")
